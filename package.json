@@ -1,0 +1,28 @@
+{
+  "name": "voice-denoise",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "bun run build:bundle && bun run build:static",
+    "build:bundle": "bun build --target browser --minify --splitting --outdir dist --sourcemap=external src/main.ts",
+    "build:static": "bun scripts/build-static.ts",
+    "preview": "bun run build && bun scripts/preview.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write 'src/**/*.ts'",
+    "format:check": "prettier --check 'src/**/*.ts'",
+    "build:dfn3": "cd wasm/deepfilternet && cargo build --target wasm32-unknown-unknown --release && mkdir -p pkg && cp target/wasm32-unknown-unknown/release/deepfilternet3_wasm.wasm pkg/dfn3_bg.wasm"
+  },
+  "dependencies": {
+    "@preact/signals-core": "^1.14.4",
+    "onnxruntime-web": "^1.27.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "vite": "^6.0.0"
+  }
+}

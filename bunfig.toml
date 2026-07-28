@@ -1,0 +1,2 @@
+[test]
+# bun test defaults are sufficient; no preload needed.

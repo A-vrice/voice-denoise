@@ -1,0 +1,17 @@
+{
+  "name": "VoiceDenoise",
+  "short_name": "Denoise",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#1a1a2e",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "description": "ブラウザ完結型 高品質ノイズ除去ツール",
+  "categories": ["utilities", "productivity"],
+  "screenshots": [
+    { "src": "/screenshot.png", "sizes": "1280x720", "type": "image/png" }
+  ]
+}
