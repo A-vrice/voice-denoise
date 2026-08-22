@@ -9,7 +9,7 @@
 #
 # Output: /out/dfn3_bg.wasm + /out/dfn3.js
 
-FROM rust:1.74 AS builder
+FROM rust:1.98 AS builder
 
 RUN rustup target add wasm32-unknown-unknown
 RUN cargo install wasm-pack --version 0.15.0
