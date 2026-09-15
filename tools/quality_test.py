@@ -12,61 +12,37 @@ Requires: pip install pesq pystoi numpy
 """
 
 import argparse
-import sys
+import wave
 from pathlib import Path
 
 import numpy as np
 
 
 def read_wav(path: str) -> tuple[np.ndarray, int]:
-    """Read WAV file, return (samples, sample_rate)."""
-    import struct
+    """Read WAV file, return (samples, sample_rate) as mono float32."""
+    with wave.open(path, "rb") as w:
+        sr = w.getframerate()
+        nch = w.getnchannels()
+        width = w.getsampwidth()
+        raw = np.frombuffer(w.readframes(w.getnframes()), dtype=np.uint8)
 
-    with open(path, "rb") as f:
-        data = f.read()
-
-    # Parse WAV header
-    if data[:4] != b"RIFF":
-        raise ValueError(f"Not a WAV file: {path}")
-
-    # Find fmt chunk
-    pos = 12
-    sample_rate = 48000
-    bits_per_sample = 16
-    num_channels = 1
-
-    while pos < len(data) - 8:
-        chunk_id = data[pos : pos + 4]
-        chunk_size = struct.unpack("<I", data[pos + 4 : pos + 8])[0]
-        if chunk_id == b"fmt ":
-            fmt_data = data[pos + 8 : pos + 8 + chunk_size]
-            audio_format = struct.unpack("<H", fmt_data[0:2])[0]
-            num_channels = struct.unpack("<H", fmt_data[2:4])[0]
-            sample_rate = struct.unpack("<I", fmt_data[4:8])[0]
-            bits_per_sample = struct.unpack("<H", fmt_data[14:16])[0]
-        elif chunk_id == b"data":
-            raw_data = data[pos + 8 : pos + 8 + chunk_size]
-            break
-        pos += 8 + chunk_size
-
-    # Convert to float32
-    if bits_per_sample == 16:
-        dtype = np.int16
-        scale = 32768.0
-    elif bits_per_sample == 32:
-        dtype = np.int32
-        scale = 2147483648.0
+    if width == 2:
+        samples = raw.view(np.int16).astype(np.float32) / 32768.0
+    elif width == 4:
+        # 32-bit WAV from our encoder is float32
+        samples = raw.view(np.float32)
+    elif width == 3:
+        # 24-bit → int32
+        b = np.zeros((raw.size // 3, 4), dtype=np.uint8)
+        b[:, :3] = raw.reshape(-1, 3)
+        samples = b.view(np.int32).astype(np.float32) / 2147483648.0
     else:
-        dtype = np.float32
-        scale = 1.0
+        raise ValueError(f"Unsupported sample width: {width * 8} bit")
 
-    samples = np.frombuffer(raw_data, dtype=dtype).astype(np.float32) / scale
+    if nch > 1:
+        samples = samples.reshape(-1, nch).mean(axis=1)
 
-    # Mix to mono
-    if num_channels > 1:
-        samples = samples.reshape(-1, num_channels).mean(axis=1)
-
-    return samples, sample_rate
+    return samples, sr
 
 
 def main():

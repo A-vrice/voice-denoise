@@ -185,8 +185,4 @@ export class NoiseGate {
     this.vadOn = false;
   }
 
-  /** Update parameters at runtime */
-  setParams(p: Partial<GateParams>): void {
-    Object.assign(this.params, p);
-  }
 }

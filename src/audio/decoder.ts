@@ -15,7 +15,6 @@ export interface AudioFile {
 
 /**
  * Decode an audio file blob to 48kHz mono PCM.
- * Uses OfflineAudioContext for resampling.
  */
 export async function decodeAudioFile(blob: Blob): Promise<AudioFile> {
   const arrayBuffer = await blob.arrayBuffer();
@@ -29,65 +28,16 @@ export async function decodeAudioFile(blob: Blob): Promise<AudioFile> {
     await ctx.close();
   }
 
-  const srcRate = audioBuffer.sampleRate;
-  const channels = audioBuffer.numberOfChannels;
-  const srcLength = audioBuffer.length;
-
-  let pcm: Float32Array;
-  let finalSampleRate = srcRate;
-
-  if (srcRate !== 48000) {
-    // Resample via OfflineAudioContext
-    pcm = await resampleTo48k(audioBuffer);
-    finalSampleRate = 48000;
-  } else {
-    // Already 48kHz — just mix to mono if needed
-    pcm = mixToMono(audioBuffer);
-  }
+  const pcm = mixToMono(audioBuffer);
 
   return {
     name: "name" in blob ? (blob as File).name : "audio",
-    sampleRate: finalSampleRate,
+    sampleRate: 48000,
     channels: 1, // mono output
     length: pcm.length,
-    duration: pcm.length / finalSampleRate,
+    duration: pcm.length / 48000,
     data: pcm,
   };
-}
-
-/**
- * Resample any AudioBuffer to 48kHz mono using OfflineAudioContext.
- */
-async function resampleTo48k(src: AudioBuffer): Promise<Float32Array> {
-  const srcRate = src.sampleRate;
-  const srcLen = src.length;
-  const targetLen = Math.round((srcLen / srcRate) * 48000);
-
-  // Create offline context at 48kHz
-  const offline = new OfflineAudioContext(1, targetLen, 48000);
-  const srcNode = offline.createBufferSource();
-  // Downmix to mono by creating a 1-channel buffer
-  const mono = offline.createBuffer(1, srcLen, srcRate);
-  const monoData = mono.getChannelData(0);
-
-  if (src.numberOfChannels === 1) {
-    monoData.set(src.getChannelData(0));
-  } else {
-    // Average all channels
-    const chans = Array.from({ length: src.numberOfChannels }, (_, i) => src.getChannelData(i));
-    for (let i = 0; i < srcLen; i++) {
-      let sum = 0;
-      for (let c = 0; c < chans.length; c++) sum += chans[c]![i]!;
-      monoData[i] = sum / chans.length;
-    }
-  }
-
-  srcNode.buffer = mono;
-  srcNode.connect(offline.destination);
-  srcNode.start(0);
-
-  const rendered = await offline.startRendering();
-  return rendered.getChannelData(0);
 }
 
 /**

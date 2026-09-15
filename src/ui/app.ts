@@ -7,7 +7,8 @@ import { el } from "../core/dom";
 import { mountSplash } from "./splash";
 import { mountWaveform } from "./waveform";
 import { mountControls, type ControlState } from "./controls";
-import { FilePipeline, type PipelineEvent } from "../audio/pipeline";
+import { type PipelineEvent } from "../audio/pipeline";
+import { processInWorker } from "../audio/pipeline-client";
 import { createVadEngine, type VadEngine } from "../audio/vad-engine";
 import { downloadBlob } from "../audio/encoder";
 import { playPcm, stopPlayback } from "../audio/player";
@@ -40,9 +41,9 @@ export function mountApp(root: HTMLElement): () => void {
   const isMicActive = signal(false);
   const isPlaying = signal(false);
   const abActive = signal(false);
-  const outputFormat = signal<"wav" | "mp3" | "ogg">("wav");
+  const isRecording = signal(false);
+  const recordedBlob = signal<Blob | null>(null);
 
-  let pipeline: FilePipeline | null = null;
   let realtimeProcessor: RealtimeProcessor | null = null;
   let processAbort: AbortController | null = null;
   let playStopFn: (() => void) | null = null;
@@ -64,6 +65,15 @@ export function mountApp(root: HTMLElement): () => void {
       })();
     }
     return vadPromise;
+  }
+
+  // --- Shared DFN3 engine (reserved for future high_quality in worker) ---
+  let dfn3Promise: Promise<import("../audio/dfn3-engine").Dfn3Engine | null> | null = null;
+  function getDfn3(): Promise<import("../audio/dfn3-engine").Dfn3Engine | null> {
+    if (!dfn3Promise) {
+      dfn3Promise = import("../audio/dfn3-engine").then((m) => m.getDfn3Engine());
+    }
+    return dfn3Promise;
   }
 
   // Signal splash readiness when VAD loads (with 15s timeout fallback).
@@ -103,6 +113,8 @@ export function mountApp(root: HTMLElement): () => void {
   // --- Handlers ---
   async function onMicToggle(): Promise<void> {
     if (isMicActive.value) {
+      if (isRecording.value) try { realtimeProcessor?.stopRecording(); } catch {}
+      isRecording.value = false;
       realtimeProcessor?.stop();
       realtimeProcessor = null;
       isMicActive.value = false;
@@ -120,6 +132,7 @@ export function mountApp(root: HTMLElement): () => void {
         hpfCutoffHz: hpfCutoffHz.value,
         agcEnabled: agcEnabled.value,
         limiterEnabled: limiterEnabled.value,
+        suppression: suppression.value,
       });
       realtimeProcessor = proc;
       isMicActive.value = true;
@@ -133,6 +146,34 @@ export function mountApp(root: HTMLElement): () => void {
       } else {
         statusText.value = "マイクの起動に失敗しました。再試行してください。";
         console.error("mic error", err);
+      }
+    }
+  }
+
+  function onRecordToggle(): void {
+    if (!realtimeProcessor) return;
+    if (isRecording.value) {
+      const blob = realtimeProcessor.stopRecording();
+      if (blob) {
+        recordedBlob.value = blob;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `mic-recording-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.webm`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        statusText.value = "録音を保存しました";
+      }
+      isRecording.value = false;
+    } else {
+      try {
+        realtimeProcessor.startRecording();
+        recordedBlob.value = null;
+        isRecording.value = true;
+        statusText.value = "録音中...";
+      } catch (err) {
+        console.warn("record start failed", err);
+        statusText.value = "録音の開始に失敗しました";
       }
     }
   }
@@ -192,27 +233,25 @@ export function mountApp(root: HTMLElement): () => void {
     processAbort = controller;
 
     try {
-      const vadEngine = await getVadEngine();
+      // File processing is offloaded to a Worker (pipeline-client.ts) so
+      // long files do not jank the main thread. getVadEngine/getDfn3 are
+      // no longer pre-fetched here — the worker loads VAD itself and DFN3
+      // is still gated behind engineMode (standard path has no DFN3).
       controller.signal.throwIfAborted();
-
-      const pipe = new FilePipeline({
-        vadThreshold: vadThreshold.value,
-        releaseMs: releaseMs.value,
-        holdMs: holdMs.value,
-        suppression: suppression.value / 100,
-        mode: engineMode.value,
-        hpfCutoffHz: hpfCutoffHz.value,
-        agcEnabled: agcEnabled.value,
-        limiterEnabled: limiterEnabled.value,
-      });
-      pipeline = pipe;
-
-      if (vadEngine) pipe.setVadEngine(vadEngine);
-
       statusText.value = "処理中...";
-      const result = await pipe.processPCM(
+      const result = await processInWorker(
         inputPcm.value,
         48000,
+        {
+          vadThreshold: vadThreshold.value,
+          releaseMs: releaseMs.value,
+          holdMs: holdMs.value,
+          suppression: suppression.value / 100,
+          mode: engineMode.value,
+          hpfCutoffHz: hpfCutoffHz.value,
+          agcEnabled: agcEnabled.value,
+          limiterEnabled: limiterEnabled.value,
+        },
         (ev: PipelineEvent) => {
           if (ev.type === "progress") {
             progress.value = ev.percent;
@@ -236,7 +275,6 @@ export function mountApp(root: HTMLElement): () => void {
       }
     } finally {
       processAbort = null;
-      pipeline = null;
       isProcessing.value = false;
       const st = statusText.value;
       if (st === "処理完了" || st.startsWith("エラー")) {
@@ -261,17 +299,10 @@ export function mountApp(root: HTMLElement): () => void {
 
   // --- DOM construction ---
   // Header
-  const headerActions = el(
-    "div",
-    { class: "header-actions" },
-    el("button", { class: "icon-btn", title: "設定" }, "⚙"),
-    el("button", { class: "icon-btn", title: "ヘルプ" }, "?"),
-  );
   const header = el(
     "header",
     { class: "header" },
     el("h1", { class: "logo" }, "VoiceDenoise"),
-    headerActions,
   );
 
   // Waveform + Controls containers (children mount themselves).
@@ -304,6 +335,9 @@ export function mountApp(root: HTMLElement): () => void {
   const abBtn = el("button", { class: "btn btn-secondary" }, "▶ 出力");
   abBtn.addEventListener("click", onAbToggle);
 
+  const recBtn = el("button", { class: "btn btn-secondary" }, "● 録音");
+  recBtn.addEventListener("click", onRecordToggle);
+
   // Status bar
   const progressFill = el("div", { class: "progress-fill" });
   const progressBar = el("div", { class: "progress-bar" }, progressFill);
@@ -311,22 +345,6 @@ export function mountApp(root: HTMLElement): () => void {
   const etaSpan = el("span", { class: "eta-text" });
   const statusBar = el("div", { class: "status-bar" }, progressBar, statusSpan, etaSpan);
 
-  // Format row
-  const formatSelect = el("select", { class: "format-select" }) as HTMLSelectElement;
-  formatSelect.append(
-    el("option", { value: "wav" }, "WAV"),
-    el("option", { value: "mp3", disabled: "true" }, "MP3 (準備中)"),
-    el("option", { value: "ogg", disabled: "true" }, "OGG (準備中)"),
-  );
-  formatSelect.addEventListener("change", () => {
-    outputFormat.value = formatSelect.value as "wav" | "mp3" | "ogg";
-  });
-  const formatRow = el(
-    "div",
-    { class: "format-row" },
-    el("span", { class: "format-label" }, "出力形式:"),
-    formatSelect,
-  );
 
   const fileActions = el(
     "div",
@@ -337,8 +355,8 @@ export function mountApp(root: HTMLElement): () => void {
     dlBtn,
     playBtn,
     abBtn,
+    recBtn,
     statusBar,
-    formatRow,
   );
   main.append(fileActions);
 
@@ -364,6 +382,14 @@ export function mountApp(root: HTMLElement): () => void {
   cleanups.push(mountControls(controlsHost, controlState));
 
   cleanups.push(mountSplash(root, splashReady));
+
+  // Live suppression update to worklet (high_quality realtime)
+  cleanups.push(
+    effect(() => {
+      const v = suppression.value;
+      realtimeProcessor?.setSuppression(v);
+    }),
+  );
 
   // --- Reactive bindings ---
   cleanups.push(
@@ -396,6 +422,20 @@ export function mountApp(root: HTMLElement): () => void {
 
   cleanups.push(
     effect(() => {
+      recBtn.textContent = isRecording.value ? "■ 停止して保存" : "● 録音";
+      recBtn.className = `btn btn-${isRecording.value ? "danger" : "secondary"}`;
+    }),
+  );
+
+  cleanups.push(
+    effect(() => {
+      recBtn.hidden = !isMicActive.value;
+      recBtn.disabled = !isMicActive.value;
+    }),
+  );
+
+  cleanups.push(
+    effect(() => {
       playBtn.textContent = isPlaying.value ? "⏹ 試聴停止" : "▶ 試聴";
     }),
   );
@@ -421,16 +461,12 @@ export function mountApp(root: HTMLElement): () => void {
     }),
   );
 
-  cleanups.push(
-    effect(() => {
-      formatSelect.disabled = isProcessing.value;
-    }),
-  );
 
   return () => {
     for (const c of cleanups) c();
     vadLoadEffect();
     stopPlay();
+    try { realtimeProcessor?.stopRecording(); } catch {}
     realtimeProcessor?.stop();
     processAbort?.abort();
     appDiv.remove();

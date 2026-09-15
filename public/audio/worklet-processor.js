@@ -11,10 +11,15 @@
  *
  * Registered as "voice-denoise-processor".
  */
-
 // AudioWorkletGlobalScope — no module imports available.
 // All dependencies must be inlined or loaded via global scope.
+// H-2: HPF/AutoGain/Limiter は src/audio/{hpf,auto-gain,limiter}.ts の
+// インライン複製。制約上 unavoidable duplication — 係数・定数を変える際は
+// 両側を同期すること。
 
+// DFN glue (src/audio/df.js) is prepended into dist/audio/worklet-processor.js
+// by build-static.ts; these helpers resolve to globalThis after the prepend.
+/* global initSync, df_create, df_get_frame_length, df_process_frame, df_set_atten_lim */
 class VoiceDenoiseProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -78,23 +83,57 @@ class VoiceDenoiseProcessor extends AudioWorkletProcessor {
     this._limiterThreshold = Math.pow(10, -2 / 20); // ~0.794
     this._limiterAttackCoef = Math.exp(-1 / (48000 * 0.0005));
     this._limiterReleaseCoef = Math.exp(-1 / (48000 * 0.03));
-
-    // Receive parameter updates from main thread
+    // DFN3 high-quality state — null until wasm+model arrive via params
+    this._dfn = null;
+    this._dfnFrameLen = 0;
+    // VAD 遅延補償(32ms=1536smpl)と推論用リング — ponytail: SAB は将来対応、現状は TypedArray+transferable で十分
+    this._vadDelayBuf = new Float32Array(1536);
+    this._vadDelayPos = 0;
+    this._vadDelayFilled = 0;
+    this._vadBuf = new Float32Array(4096);
+    this._vadLen = 0;
+    // SAB ring (AudioWorklet -> main VAD) — same layout as src/audio/ring-buffer.ts
+    this._sab = null;
+    this._sabWriteIdx = null;
+    this._sabReadIdx = null;
+    this._sabBuf = null;
     this.port.onmessage = (event) => {
-      if (event.data.type === "params") {
+      const msg = event.data;
+      if (msg.type === "sab" && msg.sab instanceof SharedArrayBuffer) {
+        try {
+          this._sab = msg.sab;
+          this._sabWriteIdx = new Int32Array(msg.sab, 0, 1);
+          this._sabReadIdx = new Int32Array(msg.sab, 4, 1);
+          this._sabBuf = new Float32Array(msg.sab, 8, 4096);
+        } catch (e) { console.warn("[worklet] SAB init failed", e); }
+        return;
+      }
+      if (msg.type === "params") {
         const prevCutoff = this._params.hpfCutoffHz;
-        Object.assign(this._params, event.data.params);
-        if (this._params.hpfCutoffHz !== prevCutoff) {
-          this._updateHpfCoeffs();
+        Object.assign(this._params, msg.params);
+        if (this._params.hpfCutoffHz !== prevCutoff) this._updateHpfCoeffs();
+        // First high_quality signal carries compiled wasm + model bytes
+        if (msg.params.mode === "high_quality" && this._dfn == null && msg.wasmModule) {
+          try {
+            // @ts-ignore — globalThis is populated by build-static preamble
+            initSync({ module: msg.wasmModule });
+            const m = new Uint8Array(msg.modelBytes);
+            const h = df_create(m, msg.suppression ?? 100);
+            const fl = df_get_frame_length(h);
+            this._dfn = h;
+            this._dfnFrameLen = fl;
+            this._dfnInBuf = new Float32Array(fl * 4);
+            this._dfnOutBuf = new Float32Array(fl * 4);
+            this._dfnWarmupFrames = 3;
+          } catch (e) {
+            console.warn("DFN3 worklet init failed:", e);
+          }
         }
       }
-      if (event.data.type === "vad") {
-        // VAD probability from main thread (ONNX inference)
-        this._vadProb = event.data.probability;
-      }
+      if (msg.type === "vad") { this._vadProb = msg.probability; }
+      if (msg.type === "suppression" && this._dfn != null) df_set_atten_lim(this._dfn, Math.max(0, Math.min(100, msg.value)));
     };
   }
-
   static get parameterDescriptors() {
     return [
       { name: "threshold", defaultValue: 0.5, minValue: 0.1, maxValue: 0.9 },
@@ -113,16 +152,45 @@ class VoiceDenoiseProcessor extends AudioWorkletProcessor {
     const outChannel = output[0];
     const len = channel.length;
 
-    // Apply Noise Gate in the worklet
-    // VAD probability is received asynchronously from main thread;
-    // use the last known value with smoothing.
+    // 32ms 遅延補償付きゲート: VAD 推論対象窓とゲート適用窓を一致（語頭刈り込み/語尾引きずり対策）
+    // 初回 1536 サンプルは遅延が充填されるまで現サンプルでゲート（無音を作らない）
     for (let i = 0; i < len; i++) {
-      // Simple EMA smoothing for VAD probability
-      this._smoothedProb =
-        this._smoothedProb * 0.7 + this._vadProb * 0.3;
-
+      let src = channel[i];
+      if (this._vadDelayFilled >= 1536) {
+        src = this._vadDelayBuf[this._vadDelayPos];
+        this._vadDelayBuf[this._vadDelayPos] = channel[i];
+        this._vadDelayPos = (this._vadDelayPos + 1) % 1536;
+      } else {
+        this._vadDelayBuf[this._vadDelayPos] = channel[i];
+        this._vadDelayPos = (this._vadDelayPos + 1) % 1536;
+        this._vadDelayFilled++;
+        // 充填前は現サンプルをそのままゲート
+      }
+      this._smoothedProb = this._smoothedProb * 0.7 + this._vadProb * 0.3;
       const gain = this._computeGateGain(this._smoothedProb);
-      outChannel[i] = channel[i] * gain;
+      outChannel[i] = src * gain;
+    }
+
+    if (this._dfn != null) {
+      const fl = this._dfnFrameLen;
+      // Linear accumulation into a simple window buffer (avoids circular math —
+      // only 480 samples per 128-sample quantum, max 4 calls per process tick).
+      if (!this._dfnInAccum) this._dfnInAccum = [];
+      for (let i = 0; i < len; i++) this._dfnInAccum.push(outChannel[i]);
+      if (!this._dfnOutQ) this._dfnOutQ = [];
+      while (this._dfnInAccum.length >= fl) {
+        const frame = new Float32Array(this._dfnInAccum.splice(0, fl));
+        const res = df_process_frame(this._dfn, frame);
+        for (let k = 0; k < res.length; k++) this._dfnOutQ.push(res[k]);
+      }
+      // Warmup: suppress output until 3 DFN frames have been processed (STFT prime)
+      // Threshold is fl*3 (DFN frame length 480), not len*3 (quantum 128) — see review C-2.
+      const needWarmup = this._dfnOutQ.length < fl * 3;
+      if (needWarmup) {
+        // leave gate-only output as-is (no overwrite) — graceful warmup
+      } else {
+        for (let i = 0; i < len; i++) outChannel[i] = this._dfnOutQ.shift();
+      }
     }
 
     // --- Post-processing: HPF → Auto Gain → Limiter ---
@@ -204,19 +272,38 @@ class VoiceDenoiseProcessor extends AudioWorkletProcessor {
       this._limiterGain = gain;
     }
 
-    // Send audio data to main thread for VAD inference (every 1536 samples)
-
-    // Accumulate samples in a buffer
-    if (!this._accumulator) this._accumulator = [];
-    for (let i = 0; i < len; i++) {
-      this._accumulator.push(channel[i]);
-    }
-    if (this._accumulator.length >= 1536) {
-      const chunk = this._accumulator.splice(0, 1536);
-      this.port.postMessage({
-        type: "audio",
-        samples: chunk,
-      });
+    // VAD 推論用転送: SAB があれば lock-free ring に書き、なければ Float32Array + Transferable にフォールバック
+    if (this._sabBuf && this._sabWriteIdx && this._sabReadIdx) {
+      // SAB path — SPSC, mask 4095
+      for (let i = 0; i < len; i++) {
+        const wi = Atomics.load(this._sabWriteIdx, 0);
+        const ri = Atomics.load(this._sabReadIdx, 0);
+        const avail = (wi - ri) & 4095;
+        const free = 4095 - avail;
+        if (free <= 0) break; // drop oldest if full (avoid stall)
+        this._sabBuf[wi & 4095] = channel[i];
+        Atomics.store(this._sabWriteIdx, 0, (wi + 1) & 4095);
+      }
+      const avail = (Atomics.load(this._sabWriteIdx, 0) - Atomics.load(this._sabReadIdx, 0)) & 4095;
+      if (avail >= 1536) {
+        this.port.postMessage({ type: "audio", sab: true });
+      }
+    } else {
+      for (let i = 0; i < len; i++) {
+        if (this._vadLen >= this._vadBuf.length) {
+          const nb = new Float32Array(this._vadBuf.length * 2);
+          nb.set(this._vadBuf.subarray(0, this._vadLen));
+          this._vadBuf = nb;
+        }
+        this._vadBuf[this._vadLen++] = channel[i];
+      }
+      while (this._vadLen >= 1536) {
+        const chunk = new Float32Array(1536);
+        chunk.set(this._vadBuf.subarray(0, 1536));
+        this._vadBuf.copyWithin(0, 1536, this._vadLen);
+        this._vadLen -= 1536;
+        this.port.postMessage({ type: "audio", samples: chunk }, [chunk.buffer]);
+      }
     }
 
     return true; // Keep processor alive

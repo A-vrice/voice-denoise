@@ -54,7 +54,7 @@ export function mountControls(container: HTMLElement, state: ControlState): () =
       "span",
       { class: "radio-label" },
       "高品質",
-      el("span", { class: "radio-desc" }, "(DFN3実装中)"),
+      el("span", { class: "radio-desc" }, "(DFN3 + VAD Gate)"),
     ),
   );
   const hqRadio = hqLabel.querySelector("input") as HTMLInputElement;

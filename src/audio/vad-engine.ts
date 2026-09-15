@@ -18,20 +18,56 @@ export interface VadEngine {
   destroy(): void;
 }
 
-function downsampleTo16k(src: Float32Array): Float32Array {
-  const dstLen = Math.min(Math.floor(src.length / 3), 512);
+/** Decimation factor 48kHz → 16kHz. */
+const DECIM = 3;
+/** FIR length (odd => integer center tap, needed for a symmetric linear-phase FIR). */
+const TAPS = 49;
+/** Anti-alias cutoff (< new Nyquist 8kHz). */
+const CUTOFF_HZ = 7000;
+const FS = 48000;
+
+/**
+ * Windowed-sinc (Blackman) low-pass, DC-normalized to 1.
+ * Built once at module load.
+ */
+function designLowpass(taps: number, cutoffHz: number, fs: number): Float32Array {
+  const h = new Float32Array(taps);
+  const fc = cutoffHz / fs; // cycles/sample
+  const mid = (taps - 1) / 2;
+  let sum = 0;
+  for (let i = 0; i < taps; i++) {
+    const x = i - mid;
+    const sinc = x === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * x) / (Math.PI * x);
+    const w =
+      0.42 -
+      0.5 * Math.cos((2 * Math.PI * i) / (taps - 1)) +
+      0.08 * Math.cos((4 * Math.PI * i) / (taps - 1));
+    const v = sinc * w;
+    h[i] = v;
+    sum += v;
+  }
+  for (let i = 0; i < taps; i++) h[i] = h[i]! / sum;
+  return h;
+}
+
+const LP = designLowpass(TAPS, CUTOFF_HZ, FS);
+const LP_HALF = (TAPS - 1) / 2;
+
+/**
+ * 48kHz → 16kHz: linear-phase FIR low-pass (anti-alias) then 3:1 decimation.
+ * Output length = min(input.length / 3, 512). Edge samples are zero-padded.
+ */
+export function downsampleTo16k(src: Float32Array): Float32Array {
+  const dstLen = Math.min(Math.floor(src.length / DECIM), 512);
   const dst = new Float32Array(dstLen);
-  // 1次 IIR ローパス(fc ≈ 7kHz @48kHz)で折り返しを抑えてから 3:1 間引き
-  // alpha = exp(-2*PI*7000/48000) ≈ 0.40
-  const alpha = 0.4;
-  let prev = 0;
-  let out = 0;
-  for (let i = 0; i < src.length && out < dstLen; i++) {
-    prev = alpha * prev + (1 - alpha) * (src[i] ?? 0);
-    if (i % 3 === 2) {
-      dst[out] = prev;
-      out++;
+  for (let n = 0; n < dstLen; n++) {
+    const center = n * DECIM;
+    let acc = 0;
+    for (let k = 0; k < TAPS; k++) {
+      const idx = center + k - LP_HALF;
+      if (idx >= 0 && idx < src.length) acc += LP[k]! * src[idx]!;
     }
+    dst[n] = acc;
   }
   return dst;
 }

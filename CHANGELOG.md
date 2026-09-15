@@ -63,3 +63,15 @@ VoiceDenoise — ブラウザ完結型ノイズ除去ツール。初回実装（
 - U5: ファイル読込/処理/マイク のエラーメッセージを日本語ユーザー向け案内に置換
 - U6: Splash を3秒固定から VADモデルロード完了(または15秒タイムアウト)連動に変更
 - U7: 出力波形をRMS比で発話区間(緑)/無音区間(暗灰)に色分け
+## 0.2.0 (2026-08-27)
+
+### Phase 1-5 完成: ORT 正式化 + Worker + DFN3 高品質 + PWA v3
+- **goal.md §4.2/5.1/8.2**: Silero VAD を ONNX Runtime Web 正式採用（C→WASM 温存）へ改訂。メモリ ~82MB / 初回DL ~27MB 明記
+- **ORT**: `ort-wasm-simd-threaded.wasm` 13.2MB + `silero_vad.onnx` 2.2MB。v5/v6 STFT+dw/pw conv 対応
+- **ファイル処理 Worker**: `pipeline.worker.ts` (0.42MB) + `pipeline-client.ts` で VAD/Gate をメインスレッド外へ。`AbortSignal` / フォールバック付き
+- **DFN3 高品質**: `df_bg.wasm` 15.7MB + `DeepFilterNet3_onnx.tar.gz` 7.8MB を Worker 内でロード。`getDfn3Engine` シングルトン共用
+- **Post-EQ**: `OfflineAudioContext` → RBJ highshelf biquad (Worker 対応) に置換
+- **リアルタイム**: `RealtimeConfig.suppression` + `setSuppression()` で worklet へライブ反映
+- **PWA**: `sw.js` v2→v3 bump (`~27MB` 明記)
+- **UI/ドキュメント**: レイテンシ表記を goal §7.1 準拠（standard ~38ms / high-quality ~69ms）に修正。Worker 記述を `README` アーキテクチャに反映
+- **ビルド**: `scripts/build-static.ts` が Worker を `dist/pipeline.worker.js` へ emit、`dist/main.js` の `.ts→.js` パッチ

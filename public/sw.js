@@ -1,18 +1,20 @@
-// VoiceDenoise Service Worker v2
+// VoiceDenoise Service Worker v3 (~38MB: df_bg 16.4MB + model 7.6MB + ORT 12.9MB + silero 2.2MB)
 // Cache strategies per spec:
 //   WASM/Model binaries -> Cache-First
 //   JS/CSS assets -> Stale-While-Revalidate
 //   index.html -> Network-First
+// M-1: モデル/WASM を更新したら CACHE_NAME / MODEL_CACHE を bump すること
+// (public/_headers の immutable と併用 — SW だけでは古いモデルが残る)。
 
-var CACHE_NAME = "voice-denoise-v2";
-var MODEL_CACHE = "voice-denoise-models-v2";
-
+var CACHE_NAME = "voice-denoise-v3";
+var MODEL_CACHE = "voice-denoise-models-v3";
 var PRECACHE_ASSETS = ["/", "/manifest.json"];
 var MODEL_URLS = [
   "/models/silero_vad.onnx",
   "/wasm/ort-wasm-simd-threaded.wasm",
   "/wasm/ort-wasm-simd-threaded.mjs",
-  "/wasm/dfn3.wasm",
+  "/wasm/df_bg.wasm",
+  "/models/DeepFilterNet3_onnx.tar.gz",
 ];
 
 self.addEventListener("install", function (event) {

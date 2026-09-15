@@ -29,18 +29,3 @@ jobs:
           name: dist
           path: dist/
 
-  quality:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - run: pip install pystoi pesq numpy
-
-      - name: Quality test placeholder
-        run: |
-          echo "PESQ/STOI quality tests require reference audio."
-          echo "Run: python tools/quality_test.py --ref clean.wav --deg processed.wav"

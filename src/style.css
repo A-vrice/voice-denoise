@@ -1,3 +1,4 @@
+body { margin: 0; background: #0a0a0a; color: #ddd; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 /* ===== App ===== */
 .app {
   max-width: 800px;
@@ -22,24 +23,6 @@
   font-weight: 700;
   color: #fff;
   margin: 0;
-}
-.header-actions {
-  display: flex;
-  gap: 8px;
-}
-.icon-btn {
-  background: none;
-  border: 1px solid #444;
-  color: #aaa;
-  width: 32px;
-  height: 32px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 1rem;
-}
-.icon-btn:hover {
-  border-color: #888;
-  color: #fff;
 }
 .main {
   flex: 1;
@@ -111,25 +94,6 @@
   color: #888;
   font-size: 0.85rem;
   flex: 1;
-}
-.format-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 4px 0;
-}
-.format-label {
-  color: #888;
-  font-size: 0.85rem;
-}
-.format-select {
-  background: #1a1a2e;
-  color: #ddd;
-  border: 1px solid #333;
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-size: 0.85rem;
 }
 .eta-text {
   color: #666;

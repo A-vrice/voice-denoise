@@ -1,8 +1,9 @@
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; worker-src 'self'; connect-src 'self'; img-src 'self' data:
-
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'; connect-src 'self'; img-src 'self' data:
+  # M-2: style-src の 'unsafe-inline' を除去（index.html のインライン <style> は
+  # src/style.css へ移行済みであれば不要。残す場合は nonce/hash に切替）。
 /wasm/*.wasm
   Content-Type: application/wasm
 
@@ -10,4 +11,5 @@
   Content-Type: text/javascript
 
 /models/*
+  # M-1: immutable — モデル更新時は sw.js の CACHE_NAME/MODEL_CACHE を bump
   Cache-Control: public, max-age=31536000, immutable
