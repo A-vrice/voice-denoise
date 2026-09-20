@@ -44,18 +44,50 @@ suite("Dfn3Engine", () => {
     for (let i = 0; i < N; i++) expect(Number.isFinite(y[i]!)).toBe(true);
   }, 30000);
 
-  // 長い入力で途中 abort すると AbortError で止まる（停止ボタンが実際に効く根拠）。
-  // 短い入力だと yield 前に完走してしまうため、yield 間隔(200 frame)を跨ぐ長さにする。
-  it("rejects with AbortError when aborted mid-pass, instead of running to completion", async () => {
+  // 実際の停止ボタンと同じ「タイマー起点」で abort する。同期的な
+  // controller.abort() では、yield がイベントループを譲らずタイマーを飢餓
+  // させていても通ってしまい回帰を検出できない。ここは実時間のタイマーが
+  // 必要（fake timer では「yield がタイマーを飢餓させない」ことを検証できない
+  // — 検証対象そのものが実時間のタスクソース間の挙動なので例外とする）。
+  it("observes a timer-scheduled abort mid-pass", async () => {
     const eng = createDfn3EngineFromBytes(readFileSync(WASM), new Uint8Array(readFileSync(MODEL)));
-    const controller = new AbortController();
-    // 200 frame ごとに yield するので 2000 frame なら 10 回の観測点がある。
-    const x = new Float32Array(eng.frameLength * 2000);
+    const x = new Float32Array(eng.frameLength * 4000);
     for (let i = 0; i < x.length; i++) x[i] = 0.1 * Math.sin((2 * Math.PI * 300 * i) / 48000);
 
-    const pending = eng.process(x, 100, controller.signal);
+    // 完走した場合の所要時間
+    const t0 = performance.now();
+    await eng.process(x, 100);
+    const fullMs = performance.now() - t0;
+
+    // 50ms 後にタイマーで abort → 完走より明確に速く終わるはず
+    eng.reset();
+    const controller = new AbortController();
+    let firedAt = -1;
+    const started = performance.now();
+    const timer = setTimeout(() => {
+      firedAt = performance.now() - started;
+      controller.abort();
+    }, 50);
+    await expect(eng.process(x, 100, controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    const abortedMs = performance.now() - started;
+    clearTimeout(timer);
+
+    // タイマーが実際に発火した（=yield がタイマーのタスクソースを飢餓させない）
+    expect(firedAt).toBeGreaterThanOrEqual(0);
+    // 完走せず途中で止まった
+    expect(abortedMs).toBeLessThan(fullMs);
+  }, 60000);
+
+  it("rejects with AbortError when the signal is already aborted", async () => {
+    const eng = createDfn3EngineFromBytes(readFileSync(WASM), new Uint8Array(readFileSync(MODEL)));
+    const controller = new AbortController();
     controller.abort();
-    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    const x = new Float32Array(eng.frameLength * 2000).fill(0.05);
+    await expect(eng.process(x, 100, controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
   }, 30000);
 
   it("resolves normally when the signal is never aborted", async () => {
