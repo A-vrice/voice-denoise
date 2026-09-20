@@ -79,6 +79,7 @@ async function main(): Promise<void> {
   if (files.length === 0) throw new Error(`no *_noisy.wav fixtures in ${FIX_DIR}`);
   mkdirSync(OUT_DIR, { recursive: true });
 
+  const timings: Array<Record<string, number | string>> = [];
   for (const f of files) {
     const { pcm, sr } = readWavMono16(join(FIX_DIR, f));
     const pipe = new FilePipeline({
@@ -89,12 +90,71 @@ async function main(): Promise<void> {
       limiterEnabled: true,
     });
     pipe.setDfn3Engine(dfn3);
+    const t0 = performance.now();
     const { blob } = await pipe.processPCM(pcm, sr);
+    const processMs = performance.now() - t0;
     const outName = f.replace(/_noisy\.wav$/, "_processed.wav");
     writeFileSync(join(OUT_DIR, outName), Buffer.from(await blob.arrayBuffer()));
-    console.log(`processed ${f} -> out/${outName} (${pcm.length} samples @${sr}Hz)`);
+    const audioS = pcm.length / sr;
+    timings.push({
+      file: f,
+      samples: pcm.length,
+      sr,
+      audio_s: Number(audioS.toFixed(3)),
+      process_ms: Math.round(processMs),
+      rtf: Number((processMs / 1000 / audioS).toFixed(3)),
+    });
+    console.log(
+      `processed ${f} -> out/${outName} (RTF ${(processMs / 1000 / audioS).toFixed(3)})`,
+    );
   }
-  console.log(`done: ${files.length} file(s) -> ${OUT_DIR}`);
+  // Throughput (steady-state): one long signal in a single call, plus the cost
+  // of one engine reset (df_create re-parses the model), which is otherwise
+  // included in the per-file one-shot numbers above.
+  const rt0 = performance.now();
+  dfn3.reset();
+  const resetMs = performance.now() - rt0;
+  const { pcm: p0, sr: sr0 } = readWavMono16(join(FIX_DIR, files[0]!));
+  const reps = Math.max(1, Math.ceil(30 / (p0.length / sr0)));
+  const longPcm = new Float32Array(p0.length * reps);
+  for (let r = 0; r < reps; r++) longPcm.set(p0, r * p0.length);
+  const tp = new FilePipeline({
+    mode: "high_quality",
+    suppression: 1.0,
+    hpfCutoffHz: 80,
+    agcEnabled: true,
+    limiterEnabled: true,
+  });
+  tp.setDfn3Engine(dfn3);
+  const t1 = performance.now();
+  await tp.processPCM(longPcm, sr0);
+  const tpMs = performance.now() - t1;
+  const tpAudio = longPcm.length / sr0;
+  const throughput = {
+    audio_s: Number(tpAudio.toFixed(3)),
+    process_ms: Math.round(tpMs),
+    reset_ms: Math.round(resetMs),
+    rtf: Number((tpMs / 1000 / tpAudio).toFixed(3)),
+    rtf_steady: Number(((tpMs - resetMs) / 1000 / tpAudio).toFixed(3)),
+  };
+
+  const totalMs = timings.reduce((s, t) => s + Number(t.process_ms), 0);
+  const totalAudio = timings.reduce((s, t) => s + Number(t.audio_s), 0);
+  const summary = {
+    clips: timings,
+    total: {
+      process_ms: totalMs,
+      audio_s: Number(totalAudio.toFixed(3)),
+      rtf: Number((totalMs / 1000 / totalAudio).toFixed(3)),
+    },
+    throughput,
+  };
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(join(OUT_DIR, "timing.json"), JSON.stringify(summary, null, 2) + "\n");
+  console.log(
+    `done: ${files.length} file(s) -> ${OUT_DIR} (one-shot RTF ${summary.total.rtf}; ` +
+      `steady RTF ${throughput.rtf_steady} over ${throughput.audio_s}s, reset ${throughput.reset_ms}ms)`,
+  );
 }
 
 try {

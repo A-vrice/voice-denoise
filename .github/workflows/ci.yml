@@ -45,5 +45,14 @@ jobs:
         run: bun run tools/quality/run_chain.ts
 
       - name: Quality gate (regression vs baseline)
-        run: uv run tools/quality_gate.py --fixtures tools/quality/fixtures --out tools/quality/out
+        run: uv run tools/quality_gate.py --fixtures tools/quality/fixtures --out tools/quality/out --report tools/quality/out/report.json
+
+      - name: Upload quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-report
+          path: |
+            tools/quality/out/report.json
+            tools/quality/out/timing.json
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import sys
 import wave
 from pathlib import Path
@@ -68,6 +69,7 @@ def main() -> int:
     ap.add_argument("--pesq-target", type=float, default=3.5, help="spec target (reference only)")
     ap.add_argument("--skip-pesq", action="store_true", help="check STOI only (no pesq)")
     ap.add_argument("--update-baseline", action="store_true", help="write measured values as the baseline")
+    ap.add_argument("--report", default="", help="write measured metrics + environment JSON here")
     args = ap.parse_args()
 
     try:
@@ -108,6 +110,20 @@ def main() -> int:
         measured["stoi"][name] = round(float(stoi(ref[:n], deg[:n], sr, extended=False)), 4)
         if check_pesq:
             measured["pesq"][name] = round(pesq_wb(ref[:n], deg[:n], sr), 3)
+
+    if args.report:
+        report = {
+            "environment": {
+                "python": sys.version.split()[0],
+                "platform": sys.platform,
+                "machine": platform.machine(),
+            },
+            "measured": measured,
+        }
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2) + "\n")
+        print(f"report written: {report_path}")
 
     if args.update_baseline:
         baseline_path.parent.mkdir(parents=True, exist_ok=True)
