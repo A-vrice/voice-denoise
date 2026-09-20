@@ -37,7 +37,90 @@ export interface Dfn3Engine {
 /** atten_lim: maximum attenuation in dB. 100 = effectively unlimited. */
 const DEFAULT_ATTEN_LIM_DB = 100;
 
+/**
+ * Algorithmic look-ahead of this build's deep-filter path, in DFN frames.
+ * Measured: the output is delayed by 3 frames (1440 samples @48kHz) whenever
+ * attenuation is active. Compensated by pad+trim in process().
+ */
+const DELAY_FRAMES = 3;
+
 let enginePromise: Promise<Dfn3Engine | null> | null = null;
+
+/**
+ * Build a DFN3 engine from raw wasm + model bytes. Throws on failure.
+ * Used by `getDfn3Engine()` (fetch) and by offline tooling/tests.
+ */
+export function createDfn3EngineFromBytes(
+  wasmBytes: BufferSource,
+  modelBytes: Uint8Array,
+): Dfn3Engine {
+  initSync({ module: new WebAssembly.Module(wasmBytes) });
+
+  let handle = df_create(modelBytes, DEFAULT_ATTEN_LIM_DB);
+  if (!handle) throw new Error("df_create failed");
+
+  const frameLength = df_get_frame_length(handle);
+
+  return {
+    frameLength,
+
+    process(input: Float32Array, suppressionPercent: number): Float32Array {
+      const atten = Math.max(0, Math.min(100, suppressionPercent));
+      // atten_lim=0 bypasses the model entirely (no reduction, and no delay).
+      if (atten <= 0) return new Float32Array(input);
+      df_set_atten_lim(handle, atten);
+
+      // The deep-filter path delays the output by `delay` samples. Compensate by
+      // appending `delay` zeros so the model can emit the tail, then dropping the
+      // first `delay` output samples — keeping the output time-aligned.
+      const delay = frameLength * DELAY_FRAMES;
+      const padded = new Float32Array(input.length + delay);
+      padded.set(input, 0);
+
+      const proc = new Float32Array(padded.length);
+      const frame = new Float32Array(frameLength);
+      for (let pos = 0; pos + frameLength <= padded.length; pos += frameLength) {
+        frame.set(padded.subarray(pos, pos + frameLength));
+        proc.set(df_process_frame(handle, frame), pos);
+      }
+      const tail = padded.length % frameLength;
+      if (tail !== 0) {
+        const pos = padded.length - tail;
+        frame.fill(0);
+        frame.set(padded.subarray(pos));
+        proc.set(df_process_frame(handle, frame).subarray(0, tail), pos);
+      }
+
+      const out = new Float32Array(input.length);
+      out.set(proc.subarray(delay, delay + input.length));
+
+      // Warm-up: the model's state starts cold, so crossfade the pre-DFN signal
+      // into the (now time-aligned) output over the delay window.
+      const warmup = Math.min(delay, input.length);
+      for (let i = 0; i < warmup; i++) {
+        const t = (i + 1) / warmup;
+        const gIn = Math.cos((t * Math.PI) / 2);
+        const gOut = Math.sin((t * Math.PI) / 2);
+        out[i] = input[i]! * gIn + out[i]! * gOut;
+      }
+      return out;
+    },
+
+    reset() {
+      // DFN state carries STFT/DNN overlap across calls; recreate it so each
+      // new file starts clean instead of inheriting the previous file's tail.
+      const next = df_create(modelBytes, DEFAULT_ATTEN_LIM_DB);
+      if (next) handle = next;
+    },
+
+    destroy() {
+      // The numeric handle has no exposed free() (wasm-bindgen only exposes
+      // DFState.free via externref), so drop our reference and let the page
+      // reclaim it at teardown.
+      handle = 0;
+    },
+  };
+}
 
 async function create(): Promise<Dfn3Engine | null> {
   try {
@@ -49,64 +132,7 @@ async function create(): Promise<Dfn3Engine | null> {
 
     const wasmBytes = await wasmResp.arrayBuffer();
     const modelBytes = new Uint8Array(await modelResp.arrayBuffer());
-
-    initSync({ module: new WebAssembly.Module(wasmBytes) });
-
-    let handle = df_create(modelBytes, DEFAULT_ATTEN_LIM_DB);
-    if (!handle) throw new Error("df_create failed");
-
-    const frameLength = df_get_frame_length(handle);
-
-    return {
-      frameLength,
-
-      process(input: Float32Array, suppressionPercent: number): Float32Array {
-        df_set_atten_lim(handle, Math.max(0, Math.min(100, suppressionPercent)));
-        const out = new Float32Array(input.length);
-        const frame = new Float32Array(frameLength);
-        let pos = 0;
-        while (pos < input.length) {
-          const n = Math.min(frameLength, input.length - pos);
-          if (n === frameLength) {
-            frame.set(input.subarray(pos, pos + frameLength));
-          } else {
-            frame.fill(0);
-            frame.set(input.subarray(pos, pos + n));
-          }
-          const processed = df_process_frame(handle, frame);
-          out.set(processed.subarray(0, n), pos);
-          pos += n;
-        }
-
-        // Warm-up: the model's STFT/DNN state starts at zero, so the first few
-        // frames are unreliable. df_process_frame is time-aligned (measured lag
-        // 0), so blend the pre-DFN signal into the output over the warm-up
-        // window with an equal-power crossfade. Never pad+trim: the output is
-        // not delayed, so shifting it would misalign the signal.
-        const warmup = Math.min(frameLength * 3, input.length);
-        for (let i = 0; i < warmup; i++) {
-          const t = (i + 1) / warmup;
-          const gIn = Math.cos((t * Math.PI) / 2);
-          const gOut = Math.sin((t * Math.PI) / 2);
-          out[i] = input[i]! * gIn + out[i]! * gOut;
-        }
-        return out;
-      },
-
-      reset() {
-        // DFN state carries STFT/DNN overlap across calls; recreate it so each
-        // new file starts clean instead of inheriting the previous file's tail.
-        const next = df_create(modelBytes, DEFAULT_ATTEN_LIM_DB);
-        if (next) handle = next;
-      },
-
-      destroy() {
-        // The numeric handle has no exposed free() (wasm-bindgen only exposes
-        // DFState.free via externref), so drop our reference and let the page
-        // reclaim it at teardown.
-        handle = 0;
-      },
-    };
+    return createDfn3EngineFromBytes(wasmBytes, modelBytes);
   } catch (err) {
     console.warn("DFN3 engine not available:", err);
     return null;

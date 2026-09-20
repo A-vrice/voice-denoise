@@ -29,3 +29,21 @@ jobs:
           name: dist
           path: dist/
 
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: astral-sh/setup-uv@v5
+
+      - run: bun install --frozen-lockfile
+
+      - name: Run denoise chain on fixtures
+        run: bun run tools/quality/run_chain.ts
+
+      - name: Quality gate (regression vs baseline)
+        run: uv run tools/quality_gate.py --fixtures tools/quality/fixtures --out tools/quality/out
+

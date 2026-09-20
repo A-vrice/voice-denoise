@@ -1,0 +1,66 @@
+{
+  "seed": 24301,
+  "out_sr": 48000,
+  "snrs_db": [
+    10,
+    0
+  ],
+  "clips": [
+    {
+      "name": "bdl_a0001_snr10",
+      "source": "bdl_a0001.wav",
+      "source_sr": 16000,
+      "snr_db": 10,
+      "samples": 155283
+    },
+    {
+      "name": "bdl_a0001_snr00",
+      "source": "bdl_a0001.wav",
+      "source_sr": 16000,
+      "snr_db": 0,
+      "samples": 155283
+    },
+    {
+      "name": "bdl_a0002_snr10",
+      "source": "bdl_a0002.wav",
+      "source_sr": 16000,
+      "snr_db": 10,
+      "samples": 162003
+    },
+    {
+      "name": "bdl_a0002_snr00",
+      "source": "bdl_a0002.wav",
+      "source_sr": 16000,
+      "snr_db": 0,
+      "samples": 162003
+    },
+    {
+      "name": "rms_a0001_snr10",
+      "source": "rms_a0001.wav",
+      "source_sr": 16000,
+      "snr_db": 10,
+      "samples": 144240
+    },
+    {
+      "name": "rms_a0001_snr00",
+      "source": "rms_a0001.wav",
+      "source_sr": 16000,
+      "snr_db": 0,
+      "samples": 144240
+    },
+    {
+      "name": "slt_a0001_snr10",
+      "source": "slt_a0001.wav",
+      "source_sr": 16000,
+      "snr_db": 10,
+      "samples": 161040
+    },
+    {
+      "name": "slt_a0001_snr00",
+      "source": "slt_a0001.wav",
+      "source_sr": 16000,
+      "snr_db": 0,
+      "samples": 161040
+    }
+  ]
+}
