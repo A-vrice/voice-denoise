@@ -389,6 +389,7 @@
   ├── SPEC.md          # 本仕様（唯一の正）
   ├── scripts/build-static.ts
   ├── tools/  quality_gate.py, quality_test.py, demo-smoke.ts,
+  │           build-dfn3-wasm.{md,ps1},
   │           quality/{generate_fixtures.ts, run_chain.ts, fixtures/, sources/}
   ├── .github/workflows/ci.yml
   ├── wrangler.toml / package.json / tsconfig.json / vite.config.ts
@@ -566,4 +567,5 @@
       15. 残余未決
 
    1. *DFN3 の正式配布 URL*: 本ビルド（§4.3）の一次配布元の特定（任意）。
-   2. *DFN3 サイズ削減（将来）*: 自前ビルド（LTO 等、16GB+）の実現性検討。
+   2. *DFN3 サイズ削減*: 自前ビルド（LTO, 16GB+）の手順と補助スクリプトを用意済み
+      （`tools/build-dfn3-wasm.md` / `.ps1`）。実行は 32GB 機 or larger runner で。
