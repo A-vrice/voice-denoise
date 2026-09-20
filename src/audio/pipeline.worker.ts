@@ -39,16 +39,15 @@ async function getOrCreateVad(): Promise<VadEngine | null> {
 }
 
 async function getOrCreateDfn3(): Promise<Dfn3Engine | null> {
-  if (cachedDfn3 !== undefined) return cachedDfn3 ?? null;
-  try {
-    const e = await getDfn3Engine();
-    cachedDfn3 = e;
-    return e;
-  } catch (err) {
-    console.warn("[worker] DFN3 load failed", err);
-    cachedDfn3 = null;
-    return null;
-  }
+  if (cachedDfn3 !== undefined) return cachedDfn3;
+  const engine = await getDfn3Engine();
+  // engine が null のときは cachedDfn3 を据え置き（= undefined のまま）にして
+  // 次回のジョブで再試行させる。null を確定させると、一時的なロード失敗で
+  // その worker が生きている限り高品質が使えなくなる。
+  // アセット欠落が恒久的なら毎回ロードを試みるが、fetch は HTTP キャッシュに
+  // 乗るため実害は小さい。復帰可能性を優先する。
+  if (engine) cachedDfn3 = engine;
+  return engine;
 }
 
 // 実行中のジョブ id → そのジョブの AbortController。

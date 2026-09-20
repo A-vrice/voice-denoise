@@ -50,6 +50,6 @@ if (ok) {
 }
 
 console.log(ok ? "SMOKE PASS" : "SMOKE FAIL");
-// FilePipeline holds a module-level MessageChannel (event-loop yield), which
-// keeps the Bun process alive; exit explicitly like tools/quality/run_chain.ts.
+// process.exit は終了コードを伝えるために必要（成功時のみ 0）。
+// スクリプト自体は自然終了する（event-loop.ts は setTimeout ベース）。
 process.exit(ok ? 0 : 1);

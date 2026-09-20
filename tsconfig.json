@@ -12,13 +12,9 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "sourceMap": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "declaration": true,
     "types": ["bun"],
     "lib": ["ESNext", "DOM", "DOM.Iterable", "WebWorker"]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "wasm"]
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "tools/**/*.ts", "vite.config.ts"],
+  "exclude": ["node_modules", "dist"]
 }

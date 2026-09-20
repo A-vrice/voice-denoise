@@ -5,14 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "bun run build:bundle && bun run build:static",
+    "build": "bun run clean && bun run build:bundle && bun run build:static",
+    "clean": "bun scripts/clean.ts",
     "build:bundle": "bun build --target browser --minify --splitting --outdir dist --sourcemap=external src/main.ts",
     "build:static": "bun scripts/build-static.ts",
     "preview": "vite preview",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "format": "prettier --write 'src/**/*.ts'",
-    "format:check": "prettier --check 'src/**/*.ts'"
+    "format": "prettier --write '{src,scripts,tools}/**/*.ts' 'vite.config.ts'",
+    "format:check": "prettier --check '{src,scripts,tools}/**/*.ts' 'vite.config.ts'"
   },
   "dependencies": {
     "@preact/signals-core": "^1.14.4",

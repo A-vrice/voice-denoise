@@ -97,3 +97,31 @@ suite("Dfn3Engine", () => {
     expect(y.length).toBe(x.length);
   }, 30000);
 });
+
+// 失敗したロードがキャッシュされず、次回呼び出しで再試行されることを検証する。
+// DFN3 の失敗をセッション中ずっと固定すると、一時的な瞬断から復帰できない。
+suite("getDfn3Engine retry", () => {
+  it("retries the asset fetch after a failed load instead of caching the failure", async () => {
+    const mod = await import("./dfn3-engine");
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    // 常に失敗させる。fetch 回数だけを数える（成功は不要）。
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response("nope", { status: 404 });
+    }) as unknown as typeof fetch;
+    try {
+      const first = await mod.getDfn3Engine();
+      expect(first).toBeNull();
+      const afterFirst = calls;
+      expect(afterFirst).toBeGreaterThan(0);
+
+      const second = await mod.getDfn3Engine();
+      expect(second).toBeNull();
+      // 再試行したので fetch が増えている（キャッシュされていれば増えない）
+      expect(calls).toBeGreaterThan(afterFirst);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }, 30000);
+});

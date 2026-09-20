@@ -54,7 +54,8 @@ function readWavMono16(path: string): { pcm: Float32Array; sr: number } {
     o = body + size + (size & 1);
   }
   if (dataOff < 0) throw new Error(`no data: ${path}`);
-  if (fmt !== 1 || bits !== 16) throw new Error(`expected PCM16: fmt=${fmt} bits=${bits} (${path})`);
+  if (fmt !== 1 || bits !== 16)
+    throw new Error(`expected PCM16: fmt=${fmt} bits=${bits} (${path})`);
   const frames = Math.floor(dataLen / 2 / channels);
   const pcm = new Float32Array(frames);
   for (let i = 0; i < frames; i++) pcm[i] = buf.readInt16LE(dataOff + i * channels * 2) / 32768;
@@ -102,7 +103,13 @@ function mulberry32(seed: number): () => number {
 /** Paul Kellet's refined pink-noise filter over unit white noise. */
 function pinkNoise(n: number, rnd: () => number): Float32Array {
   const out = new Float32Array(n);
-  let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+  let b0 = 0,
+    b1 = 0,
+    b2 = 0,
+    b3 = 0,
+    b4 = 0,
+    b5 = 0,
+    b6 = 0;
   for (let i = 0; i < n; i++) {
     const w = rnd() * 2 - 1;
     b0 = 0.99886 * b0 + w * 0.0555179;
@@ -133,7 +140,9 @@ async function writeWav(path: string, pcm: Float32Array): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const srcs = readdirSync(SRC_DIR).filter((f) => f.endsWith(".wav")).sort();
+  const srcs = readdirSync(SRC_DIR)
+    .filter((f) => f.endsWith(".wav"))
+    .sort();
   if (srcs.length === 0) throw new Error(`no sources in ${SRC_DIR}`);
   mkdirSync(OUT_DIR, { recursive: true });
 

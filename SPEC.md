@@ -402,7 +402,7 @@
   │   ├── models/  silero_vad.onnx, DeepFilterNet3_onnx.tar.gz
   │   └── wasm/    df_bg.wasm, ort-wasm-simd-threaded.{wasm,mjs}
   ├── SPEC.md          # 本仕様（唯一の正）
-  ├── scripts/build-static.ts
+  ├── scripts/build-static.ts, scripts/clean.ts
   ├── tools/  quality_gate.py, demo-smoke.ts,
   │           build-dfn3-wasm.{md,ps1},
   │           quality/{generate_fixtures.ts, run_chain.ts, fixtures/, sources/}
@@ -414,7 +414,8 @@
 
   |bun install            # 依存導入
   bun run dev            # Vite 開発サーバ（COOP/COEP HMR）
-  bun run build          # build:bundle (bun build src/main.ts) + build:static
+  bun run build          # clean + build:bundle (bun build src/main.ts) + build:static
+  bun run clean          # dist/ を削除（単体でも使える）
   bun run test           # bun test
   bun run typecheck      # tsc --noEmit
   bun run preview        # dist のローカルプレビュー（COOP/COEP 付き）|

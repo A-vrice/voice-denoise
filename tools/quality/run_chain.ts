@@ -70,12 +70,16 @@ async function main(): Promise<void> {
   if (!existsSync(FIX_DIR)) throw new Error(`fixtures dir not found: ${FIX_DIR}`);
   console.log(`fixtures: ${FIX_DIR}`);
   const wasmBytes = readFileSync(join(ROOT, "public/wasm/df_bg.wasm"));
-  const modelBytes = new Uint8Array(readFileSync(join(ROOT, "public/models/DeepFilterNet3_onnx.tar.gz")));
+  const modelBytes = new Uint8Array(
+    readFileSync(join(ROOT, "public/models/DeepFilterNet3_onnx.tar.gz")),
+  );
   console.log("loading DFN3 engine...");
   const dfn3 = createDfn3EngineFromBytes(wasmBytes, modelBytes);
   console.log("DFN3 engine ready");
 
-  const files = readdirSync(FIX_DIR).filter((f) => f.endsWith("_noisy.wav")).sort();
+  const files = readdirSync(FIX_DIR)
+    .filter((f) => f.endsWith("_noisy.wav"))
+    .sort();
   if (files.length === 0) throw new Error(`no *_noisy.wav fixtures in ${FIX_DIR}`);
   mkdirSync(OUT_DIR, { recursive: true });
 
@@ -104,9 +108,7 @@ async function main(): Promise<void> {
       process_ms: Math.round(processMs),
       rtf: Number((processMs / 1000 / audioS).toFixed(3)),
     });
-    console.log(
-      `processed ${f} -> out/${outName} (RTF ${(processMs / 1000 / audioS).toFixed(3)})`,
-    );
+    console.log(`processed ${f} -> out/${outName} (RTF ${(processMs / 1000 / audioS).toFixed(3)})`);
   }
   // Throughput (steady-state): one long signal in a single call, plus the cost
   // of one engine reset (df_create re-parses the model), which is otherwise

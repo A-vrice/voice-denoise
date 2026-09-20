@@ -161,11 +161,17 @@ async function create(): Promise<Dfn3Engine | null> {
     return createDfn3EngineFromBytes(wasmBytes, modelBytes);
   } catch (err) {
     console.warn("DFN3 engine not available:", err);
+    // 失敗を握り潰さず再試行できるようにする（VAD 側 app.ts と同じ扱い）。
+    // 一時的なネットワーク瞬断でセッション中ずっと高品質が使えなくなるのを防ぐ。
+    enginePromise = null;
     return null;
   }
 }
 
-/** Lazy singleton. Returns null when assets are missing (fallback to standard). */
+/**
+ * Lazy singleton. Returns null when assets are missing (fallback to standard);
+ * a failed load is not cached, so the next call retries.
+ */
 export function getDfn3Engine(): Promise<Dfn3Engine | null> {
   if (!enginePromise) enginePromise = create();
   return enginePromise;

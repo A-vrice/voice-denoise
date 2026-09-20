@@ -5,16 +5,31 @@
 import { cpSync, copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
+// NOTE: dist/ のクリーンは `bun run clean`（build の先頭）が行う。ここで消すと、
+// 先に走る build:bundle が出力した dist/main.js を消してしまう。
 mkdirSync("dist", { recursive: true });
 cpSync("public", "dist", { recursive: true });
 copyFileSync("index.html", "dist/index.html");
 
 // Build file-processing worker to dist/pipeline.worker.js
 {
-  const r = spawnSync("bun", ["build", "--target", "browser", "--minify", "--outdir", "dist", "src/audio/pipeline.worker.ts"], {
-    stdio: "inherit",
-  });
-  if (r.status !== 0) console.warn("[build-static] worker build failed, standard-file fallback will be used");
+  const r = spawnSync(
+    "bun",
+    [
+      "build",
+      "--target",
+      "browser",
+      "--minify",
+      "--outdir",
+      "dist",
+      "src/audio/pipeline.worker.ts",
+    ],
+    {
+      stdio: "inherit",
+    },
+  );
+  if (r.status !== 0)
+    console.warn("[build-static] worker build failed, standard-file fallback will be used");
   // Bun emits dist/pipeline.worker.js (normalize: if nested, move)
   // Ensure the file exists at root for new URL("./pipeline.worker.js", import.meta.url) in dist/main.js
   if (!existsSync("dist/pipeline.worker.js") && existsSync("dist/src/audio/pipeline.worker.js")) {
@@ -52,7 +67,9 @@ writeFileSync("dist/index.html", html);
     .join("\n");
   const wp = "dist/audio/worklet-processor.js";
   const body = readFileSync(wp, "utf8");
-  const preamble = inlined + "\nglobalThis.initSync=initSync;globalThis.df_create=df_create;globalThis.df_get_frame_length=df_get_frame_length;globalThis.df_process_frame=df_process_frame;globalThis.df_set_atten_lim=df_set_atten_lim;\n";
+  const preamble =
+    inlined +
+    "\nglobalThis.initSync=initSync;globalThis.df_create=df_create;globalThis.df_get_frame_length=df_get_frame_length;globalThis.df_process_frame=df_process_frame;globalThis.df_set_atten_lim=df_set_atten_lim;\n";
   writeFileSync(wp, preamble + body);
 }
 console.log("static assets copied + index.html patched");

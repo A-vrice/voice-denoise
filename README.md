@@ -13,15 +13,17 @@
 - **処理**: `VAD → Noise Gate → HPF → DeepFilterNet3 → Post-EQ → AutoGain → Limiter`
 - **出力**: 16-bit モノラル WAV
 - **対応環境**: Chrome / Edge（i7-8700 級デスクトップ、メモリ ≤200MB 目安）
-- **品質目標**: PESQ ≥ 3.5 / STOI ≥ 0.95（検証基盤は整備中）
+- **品質目標**: PESQ ≥ 3.5 / STOI ≥ 0.95（仕様目標。合成ノイズの自前セットでは未達のため、
+  CI は baseline からの回帰で判定します。詳細は SPEC.md §7.1 / §9.2）
 - **初回ロード**: 約 38MB（モデル/WASM。2 回目以降は Service Worker キャッシュ）
 
 リアルタイム（マイク入力・録音）は**非目標（凍結）**です。スタンダードモード
 （DFN3 なし）はフォールバック/プレビュー用に同梱しています。
 
 > [!IMPORTANT]
-> `SharedArrayBuffer` を使うため**セキュアコンテキスト必須**（`localhost` または
-> HTTPS）で、COOP/COEP ヘッダーが必要です。`public/_headers` に設定があります。
+> セキュアコンテキスト（`localhost` または HTTPS）と COOP/COEP ヘッダーが必要です。
+> ONNX Runtime Web の threaded wasm はクロスオリジン分離下でのみ複数スレッドを使うため、
+> ヘッダーが無いと VAD 推論が単一スレッドになります。`public/_headers` に設定があります。
 
 ## クイックスタート
 
@@ -38,7 +40,7 @@ bun run preview      # dist をローカルプレビュー (COOP/COEP) → http:
 |--------|:--------:|------|
 | [Bun](https://bun.sh) | 1.2+ | ランタイム・ビルド・テスト |
 | TypeScript | 6.0+ | 型チェック (`tsc --noEmit`) |
-| Python + uv | 3.11+ | 品質テスト（PESQ/STOI、整備中） |
+| Python + uv | 3.11+ | 品質ゲート（PESQ/STOI）のローカル実行 |
 
 DFN3 の wasm/モデルは prebuilt を同梱しているため Rust ビルドは不要です。
 

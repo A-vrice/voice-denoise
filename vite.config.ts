@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, type Connect, type Plugin } from "vite";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -22,15 +22,7 @@ import { resolve } from "node:path";
  * same files untouched, so this only aligns dev and preview with production.
  */
 function servePublicAssets(): Plugin {
-  const middleware = (
-    req: { url?: string },
-    res: {
-      setHeader(k: string, v: string): void;
-      end(body: unknown): void;
-      statusCode: number;
-    },
-    next: () => void,
-  ) => {
+  const middleware: Connect.NextHandleFunction = (req, res, next) => {
     const url = req.url ?? "";
     const dir = url.startsWith("/models/")
       ? "public/models"
