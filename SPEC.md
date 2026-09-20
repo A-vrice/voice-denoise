@@ -1,4 +1,4 @@
-仕様書: ブラウザ完結型 ノイズ除去ツール（v12 — 最終目標 確定）
+仕様書: ブラウザ完結型 ノイズ除去ツール（v13 — 最終目標 確定）
 
     *改訂履歴*
 
@@ -28,10 +28,14 @@
      実値化、README を要約化（唯一の正を `SPEC.md` としてリポジトリ内へ移設）。
      `wasm/` / `Dockerfile` / 旧 `dfn3.wasm` / `dist-worker/` / `demo-*.wav`（input
      を除く）を削除。
-     - *v12（本版）*: *品質ゲート（W5）+ DFN3 遅延補償*。自前固定セット（CMU ARCTIC
+     - *v12*: *品質ゲート（W5）+ DFN3 遅延補償*。自前固定セット（CMU ARCTIC
        クリーン + 合成ピンクノイズ、8 ペア）+ チェーンハーネス + 回帰ベースの CI ゲート
        （§9.2）。DFN3 deep-filter の 3 フレーム遅延を pad+trim で補償（STOI 0.79→0.875
        @0dB SNR）。テスト 48 件 / 12 ファイル。
+     - *v13（本版）*: *CI baseline + RTF 計測*。CI(Linux) で baseline を再生成（STOI は
+       ローカルと一致、PESQ を記入。PESQ ≈1.1–1.9）。`run_chain.ts` に RTF 計測
+       （one-shot / steady）を追加し、report / timing を artifact 化。§7.2 に実測 RTF を
+       記録（CI one-shot 0.19 / steady 0.07、ローカル 0.52 / 0.26）。
 
 ------------------------------------------------------------------------
 
@@ -339,10 +343,13 @@
   - 補助指標: 無音区間の残差ノイズ ≤ -60dBFS、発話区間の歪み THD ≤ 1%、
     クリックノイズなし（聴感 + 波形）。
 
-        7.2 速度目標（確定方針: 実測してから閾値を設定）
+        7.2 速度目標（実測記録）
 
-  - 旧 RTF ≤ 0.05（i7-8700 1コア）は撤回。wasm 構成での現実的な値を実測で
-    確定し、その値を CI 回帰閾値として採用する。
+  - *実測 RTF*（フルチェーン、`run_chain.ts` の `timing.json`）:
+      - CI ubuntu-latest: one-shot 0.19 / steady 0.07（32s 音声、reset 366ms）。
+      - ローカル Windows: one-shot 0.52 / steady 0.26（reset 718ms）。
+  - 旧 RTF ≤ 0.05（i7-8700 1コア）は撤回。RTF はランナー差が大きいため *ゲート化せず
+    記録のみ*（CI で計測・artifact 化）。
   - リアルタイムはスコープ外のため、レイテンシ予算（旧 §7.1）は削除。
 
         7.3 メモリ目標（確定）
@@ -442,6 +449,8 @@
     *ベースライン（`tools/quality/baseline.json`）からの低下*が許容差（STOI 0.02 /
     PESQ 0.2）を超えたら CI を失敗させる（回帰検知）。`--update-baseline` で更新。
   - 仕様目標（PESQ ≥ 3.5 / STOI ≥ 0.95）は *参考表示*（本セットでは未達、§7.1）。
+  - baseline は CI(Linux) 生成（`quality-baseline.yml`）。STOI はローカル Windows と
+    一致を確認（プラットフォーム差なし）。PESQ（≈1.1–1.9）は CI のみで計測。
   - PESQ は Linux の wheel で CI 計測。ローカル Windows は `--skip-pesq`（pesq は
     MSVC 要）。CI の `quality` ジョブが計測する。
 
@@ -459,10 +468,9 @@
   Phase 2	DFN3 + パイプライン統合	✅ 実装済み（順序修正済み）。wasm は 16.4MB 維持
   Phase 3	PWA + Service Worker + オフライン	✅ 実装済み
   Phase 4	リアルタイム + A/B 比較	⊘ 非目標（凍結温存）。A/B 比較のみ継続
-  Phase 5	品質チューニング + テスト + ドキュメント	△ 品質セット・回帰ゲートは実装済み（PESQ baseline は CI 実測待ち）
+  Phase 5	品質チューニング + テスト + ドキュメント	✅ 品質セット・回帰ゲート・CI baseline・RTF 計測 実装済み（残: decoder テスト）
 
-  - 目標達成に必要な残作業: ①PESQ baseline を CI 実測で確定 ②RTF 実測
-    ③残テスト（decoder）。（DFN3 wasm の削減は将来の自前ビルドで検討）
+  - 目標達成に必要な残作業: ①残テスト（decoder）。（DFN3 wasm の削減は将来の自前ビルドで検討）
 
 ------------------------------------------------------------------------
 
@@ -500,10 +508,8 @@
 
   ・残（目標達成に必要）
    1. *テスト未カバー*: `decoder`（Web Audio 依存）。`vad-engine` は追加済み。
-   2. *PESQ baseline 未設定*: CI(Linux) の実測後に `baseline.json` の `pesq` を確定。
-      RTF も未実測（§7.2）。
-   3. *DFN3 wasm のサイズ*: 16.4MB を維持（wasm-opt は無効と実測、§4.3）。削減は
-      将来の自前ビルド（LTO 等）で検討。
+   2. *DFN3 wasm のサイズ*: 16.4MB を維持（wasm-opt は無効と実測、§4.3）。削減は
+      将来の自前ビルド（LTO 等）で検討（§15）。
 
   ・非目標（凍結対象）の既知課題（再開時に扱う）
   - リアルタイム VAD の時間整合（メインスレッド非同期推論）。
@@ -559,8 +565,5 @@
 
       15. 残余未決
 
-   1. *PESQ baseline*: CI(Linux) の実測値を `tools/quality/baseline.json` の `pesq` に
-      記録し、以降 PESQ も回帰対象にする。
-   2. *RTF 実測*: ファイル処理スループットを実測し §7.2 に反映。
-   3. *DFN3 の正式配布 URL*: 本ビルド（§4.3）の一次配布元の特定（任意）。
-   4. *DFN3 サイズ削減（将来）*: 自前ビルド（LTO 等、16GB+）の実現性検討。
+   1. *DFN3 の正式配布 URL*: 本ビルド（§4.3）の一次配布元の特定（任意）。
+   2. *DFN3 サイズ削減（将来）*: 自前ビルド（LTO 等、16GB+）の実現性検討。
