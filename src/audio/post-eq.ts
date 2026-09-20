@@ -47,14 +47,26 @@ export function applyPostEqSync(
   const a1 = 2 * (A - 1 - (A + 1) * cosW0);
   const a2 = A + 1 - (A - 1) * cosW0 - 2 * sqrtA * alpha;
   // Normalize by a0
-  const nb0 = b0 / a0, nb1 = b1 / a0, nb2 = b2 / a0, na1 = a1 / a0, na2 = a2 / a0;
-  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  const nb0 = b0 / a0,
+    nb1 = b1 / a0,
+    nb2 = b2 / a0,
+    na1 = a1 / a0,
+    na2 = a2 / a0;
+  let x1 = 0,
+    x2 = 0,
+    y1 = 0,
+    y2 = 0;
   for (let i = 0; i < len; i++) {
     const x = input[i]!;
     let y = nb0 * x + nb1 * x1 + nb2 * x2 - na1 * y1 - na2 * y2;
-    if (!Number.isFinite(y)) { x1 = x2 = y1 = y2 = 0; y = 0; }
-    x2 = x1; x1 = x;
-    y2 = y1; y1 = y;
+    if (!Number.isFinite(y)) {
+      x1 = x2 = y1 = y2 = 0;
+      y = 0;
+    }
+    x2 = x1;
+    x1 = x;
+    y2 = y1;
+    y1 = y;
     output[i] = y;
   }
 }

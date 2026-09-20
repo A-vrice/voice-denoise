@@ -19,7 +19,6 @@ export function mountApp(root: HTMLElement): () => void {
   // --- UI state ---
   const inputFileName = signal("");
   const inputPcm = signal<Float32Array | null>(null);
-  const inputDuration = signal(0);
   const outputPcm = signal<Float32Array | null>(null);
   const outputBlob = signal<Blob | null>(null);
 
@@ -42,7 +41,6 @@ export function mountApp(root: HTMLElement): () => void {
   const isPlaying = signal(false);
   const abActive = signal(false);
   const isRecording = signal(false);
-  const recordedBlob = signal<Blob | null>(null);
 
   let realtimeProcessor: RealtimeProcessor | null = null;
   let processAbort: AbortController | null = null;
@@ -67,15 +65,7 @@ export function mountApp(root: HTMLElement): () => void {
     return vadPromise;
   }
 
-  // --- Shared DFN3 engine (reserved for future high_quality in worker) ---
-  let dfn3Promise: Promise<import("../audio/dfn3-engine").Dfn3Engine | null> | null = null;
-  function getDfn3(): Promise<import("../audio/dfn3-engine").Dfn3Engine | null> {
-    if (!dfn3Promise) {
-      dfn3Promise = import("../audio/dfn3-engine").then((m) => m.getDfn3Engine());
-    }
-    return dfn3Promise;
-  }
-
+  // --- Splash readiness ---
   // Signal splash readiness when VAD loads (with 15s timeout fallback).
   const vadLoadEffect = effect(() => {
     let done = false;
@@ -113,7 +103,10 @@ export function mountApp(root: HTMLElement): () => void {
   // --- Handlers ---
   async function onMicToggle(): Promise<void> {
     if (isMicActive.value) {
-      if (isRecording.value) try { realtimeProcessor?.stopRecording(); } catch {}
+      if (isRecording.value)
+        try {
+          realtimeProcessor?.stopRecording();
+        } catch {}
       isRecording.value = false;
       realtimeProcessor?.stop();
       realtimeProcessor = null;
@@ -155,7 +148,6 @@ export function mountApp(root: HTMLElement): () => void {
     if (isRecording.value) {
       const blob = realtimeProcessor.stopRecording();
       if (blob) {
-        recordedBlob.value = blob;
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -168,7 +160,6 @@ export function mountApp(root: HTMLElement): () => void {
     } else {
       try {
         realtimeProcessor.startRecording();
-        recordedBlob.value = null;
         isRecording.value = true;
         statusText.value = "録音中...";
       } catch (err) {
@@ -208,7 +199,6 @@ export function mountApp(root: HTMLElement): () => void {
     try {
       const audio = await decodeAudioFile(file);
       inputPcm.value = audio.data;
-      inputDuration.value = audio.duration;
       statusText.value = `${file.name} (${audio.duration.toFixed(1)}秒)`;
     } catch (err) {
       statusText.value =
@@ -234,9 +224,8 @@ export function mountApp(root: HTMLElement): () => void {
 
     try {
       // File processing is offloaded to a Worker (pipeline-client.ts) so
-      // long files do not jank the main thread. getVadEngine/getDfn3 are
-      // no longer pre-fetched here — the worker loads VAD itself and DFN3
-      // is still gated behind engineMode (standard path has no DFN3).
+      // long files do not jank the main thread. The worker loads VAD and (for
+      // high_quality) DFN3 itself; nothing is pre-fetched here.
       controller.signal.throwIfAborted();
       statusText.value = "処理中...";
       const result = await processInWorker(
@@ -299,11 +288,7 @@ export function mountApp(root: HTMLElement): () => void {
 
   // --- DOM construction ---
   // Header
-  const header = el(
-    "header",
-    { class: "header" },
-    el("h1", { class: "logo" }, "VoiceDenoise"),
-  );
+  const header = el("header", { class: "header" }, el("h1", { class: "logo" }, "VoiceDenoise"));
 
   // Waveform + Controls containers (children mount themselves).
   const waveformHost = el("div");
@@ -319,6 +304,9 @@ export function mountApp(root: HTMLElement): () => void {
 
   const micBtn = el("button", { class: "btn btn-primary" }, "🎤 マイク入力");
   micBtn.addEventListener("click", onMicToggle);
+  // Frozen (non-goal, SPEC §6.1 / §14-13): the realtime engine is kept but the
+  // mic/record UI is hidden. Re-enable by un-hiding both buttons.
+  micBtn.hidden = true;
 
   const procBtn = el("button", { class: "btn btn-primary" }, "▶ 処理開始");
   procBtn.addEventListener("click", () => {
@@ -337,6 +325,7 @@ export function mountApp(root: HTMLElement): () => void {
 
   const recBtn = el("button", { class: "btn btn-secondary" }, "● 録音");
   recBtn.addEventListener("click", onRecordToggle);
+  recBtn.hidden = true; // frozen (SPEC §6.1) — see note on micBtn above
 
   // Status bar
   const progressFill = el("div", { class: "progress-fill" });
@@ -344,7 +333,6 @@ export function mountApp(root: HTMLElement): () => void {
   const statusSpan = el("span", { class: "status-text" });
   const etaSpan = el("span", { class: "eta-text" });
   const statusBar = el("div", { class: "status-bar" }, progressBar, statusSpan, etaSpan);
-
 
   const fileActions = el(
     "div",
@@ -461,12 +449,13 @@ export function mountApp(root: HTMLElement): () => void {
     }),
   );
 
-
   return () => {
     for (const c of cleanups) c();
     vadLoadEffect();
     stopPlay();
-    try { realtimeProcessor?.stopRecording(); } catch {}
+    try {
+      realtimeProcessor?.stopRecording();
+    } catch {}
     realtimeProcessor?.stop();
     processAbort?.abort();
     appDiv.remove();

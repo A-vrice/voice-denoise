@@ -8,11 +8,8 @@ const hasAssets = existsSync(WASM) && existsSync(MODEL);
 const suite = hasAssets ? describe : describe.skip;
 
 suite("Dfn3Engine", () => {
-  it("keeps output time-aligned with the input at atten>0 and preserves length", () => {
-    const eng = createDfn3EngineFromBytes(
-      readFileSync(WASM),
-      new Uint8Array(readFileSync(MODEL)),
-    );
+  it("keeps output time-aligned with the input at atten>0 and preserves length", async () => {
+    const eng = createDfn3EngineFromBytes(readFileSync(WASM), new Uint8Array(readFileSync(MODEL)));
     const fl = eng.frameLength;
     expect(fl).toBe(480);
 
@@ -24,7 +21,7 @@ suite("Dfn3Engine", () => {
       x[IMP + i] = 0.5 * Math.sin(2 * Math.PI * 220 * t) * Math.exp(-t * 5);
     }
 
-    const y = eng.process(x, 100); // max attenuation
+    const y = await eng.process(x, 100); // max attenuation
     expect(y.length).toBe(N);
 
     // Best alignment lag by cross-correlation around the burst. Guards the
@@ -45,5 +42,26 @@ suite("Dfn3Engine", () => {
     }
     expect(Math.abs(bestLag)).toBeLessThanOrEqual(fl);
     for (let i = 0; i < N; i++) expect(Number.isFinite(y[i]!)).toBe(true);
-  });
+  }, 30000);
+
+  // 長い入力で途中 abort すると AbortError で止まる（停止ボタンが実際に効く根拠）。
+  // 短い入力だと yield 前に完走してしまうため、yield 間隔(200 frame)を跨ぐ長さにする。
+  it("rejects with AbortError when aborted mid-pass, instead of running to completion", async () => {
+    const eng = createDfn3EngineFromBytes(readFileSync(WASM), new Uint8Array(readFileSync(MODEL)));
+    const controller = new AbortController();
+    // 200 frame ごとに yield するので 2000 frame なら 10 回の観測点がある。
+    const x = new Float32Array(eng.frameLength * 2000);
+    for (let i = 0; i < x.length; i++) x[i] = 0.1 * Math.sin((2 * Math.PI * 300 * i) / 48000);
+
+    const pending = eng.process(x, 100, controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  }, 30000);
+
+  it("resolves normally when the signal is never aborted", async () => {
+    const eng = createDfn3EngineFromBytes(readFileSync(WASM), new Uint8Array(readFileSync(MODEL)));
+    const x = new Float32Array(eng.frameLength * 400).fill(0.05);
+    const y = await eng.process(x, 100, new AbortController().signal);
+    expect(y.length).toBe(x.length);
+  }, 30000);
 });

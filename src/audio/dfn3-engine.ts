@@ -2,12 +2,12 @@
  * DFN3 engine — loads df_bg.wasm and exposes a frame-based offline processor
  * for FilePipeline.
  *
- * Provenance (see goal.md §4.3):
+ * Provenance (see SPEC.md §4.3):
  *   - df_bg.wasm is a build of the upstream DeepFilterNet `libDF` crate
  *     (`--features wasm`) with tract-onnx 0.23.3 and wasm-bindgen 0.2.126, SIMD
  *     enabled. It is NOT the wasm-opt'd artifact distributed by
  *     mezonai/mezon-noise-suppression (that one is ~9.6MB; this build is ~16.4MB
- *     with no wasm-opt pass). See goal.md §4.5 for pinned hashes.
+ *     with no wasm-opt pass). See SPEC.md §4.5 for pinned hashes.
  *   - df.js is the wasm-bindgen glue from the same build (its import hashes
  *     match df_bg.wasm's imports).
  *   - Model: public/models/DeepFilterNet3_onnx.tar.gz — upstream DeepFilterNet3
@@ -25,10 +25,21 @@ import { initSync } from "./df.js";
 // ponytail: 同一モジュールからの名前付き import が ts-expect-error 一括のため分割
 // @ts-expect-error — see above
 import { df_create, df_get_frame_length, df_process_frame, df_set_atten_lim } from "./df.js";
+import { yieldToEventLoop } from "./event-loop";
 
 export interface Dfn3Engine {
-  /** Process PCM; returns denoised copy. */
-  process(input: Float32Array, suppressionPercent: number): Float32Array;
+  /**
+   * Process PCM; resolves to a denoised copy.
+   * Yields to the event loop every `YIELD_INTERVAL_FRAMES` DFN frames and
+   * rejects with AbortError when `signal` aborts, so a long file can be
+   * cancelled mid-pass (this is why it is async: without the yields, a Worker
+   * could never read an incoming cancel message).
+   */
+  process(
+    input: Float32Array,
+    suppressionPercent: number,
+    signal?: AbortSignal,
+  ): Promise<Float32Array>;
   reset(): void;
   destroy(): void;
   readonly frameLength: number;
@@ -43,6 +54,9 @@ const DEFAULT_ATTEN_LIM_DB = 100;
  * attenuation is active. Compensated by pad+trim in process().
  */
 const DELAY_FRAMES = 3;
+
+/** DFN frames between event-loop yields (~96ms of audio at 480 samples/frame). */
+const YIELD_INTERVAL_FRAMES = 200;
 
 let enginePromise: Promise<Dfn3Engine | null> | null = null;
 
@@ -64,7 +78,11 @@ export function createDfn3EngineFromBytes(
   return {
     frameLength,
 
-    process(input: Float32Array, suppressionPercent: number): Float32Array {
+    async process(
+      input: Float32Array,
+      suppressionPercent: number,
+      signal?: AbortSignal,
+    ): Promise<Float32Array> {
       const atten = Math.max(0, Math.min(100, suppressionPercent));
       // atten_lim=0 bypasses the model entirely (no reduction, and no delay).
       if (atten <= 0) return new Float32Array(input);
@@ -79,7 +97,15 @@ export function createDfn3EngineFromBytes(
 
       const proc = new Float32Array(padded.length);
       const frame = new Float32Array(frameLength);
+      let sinceYield = 0;
       for (let pos = 0; pos + frameLength <= padded.length; pos += frameLength) {
+        if (++sinceYield >= YIELD_INTERVAL_FRAMES) {
+          sinceYield = 0;
+          // Must yield inside the loop: the wasm call below is synchronous, so
+          // this is the only point where an abort/cancel can be observed.
+          await yieldToEventLoop();
+          signal?.throwIfAborted();
+        }
         frame.set(padded.subarray(pos, pos + frameLength));
         proc.set(df_process_frame(handle, frame), pos);
       }

@@ -1,12 +1,6 @@
 node_modules/
 dist/
 .vite/
-*.wasm
-*.onnx
-test_audio.wav
-wasm-pack-*
-rustup-init.exe
-target/
 .venv/
 __pycache__/
 *.pyc

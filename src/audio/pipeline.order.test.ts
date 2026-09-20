@@ -11,15 +11,16 @@ function vadStub(probability: number): VadEngine {
   };
 }
 
-function dfnSpy(
-  run: (input: Float32Array) => Float32Array,
-): { engine: Dfn3Engine; inputs: Float32Array[] } {
+function dfnSpy(run: (input: Float32Array) => Float32Array): {
+  engine: Dfn3Engine;
+  inputs: Float32Array[];
+} {
   const inputs: Float32Array[] = [];
   const engine: Dfn3Engine = {
     frameLength: 480,
     process(input) {
       inputs.push(input);
-      return run(input);
+      return Promise.resolve(run(input));
     },
     reset() {},
     destroy() {},

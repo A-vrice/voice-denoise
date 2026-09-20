@@ -15,13 +15,15 @@
  */
 
 import type { AudioFile } from "./decoder";
-import { decodeAudioFile } from "./decoder";
-import { encodeWav, downloadBlob } from "./encoder";
+import { encodeWav } from "./encoder";
 import { NoiseGate, VadSmoother } from "./vad-gate";
 import type { VadEngine } from "./vad-engine";
+import type { Dfn3Engine } from "./dfn3-engine";
 import { HighPassFilter } from "./hpf";
 import { AutoGain } from "./auto-gain";
 import { Limiter } from "./limiter";
+import { applyPostEq } from "./post-eq";
+import { yieldToEventLoop } from "./event-loop";
 
 export type PipelineEvent =
   | { type: "progress"; percent: number; etaMs: number }
@@ -51,29 +53,10 @@ function warnDfn3NotImplemented(): void {
 }
 
 /**
- * イベントループへの明示的な譲渡。
- * VAD ループは ORT の promise がマイクロタスクで解決し続けると
- * 入力イベント・描画が完了まで飢餓する（停止ボタンが効かない）ため、
- * 定期的にマクロタスク境界を挟む。setTimeout(0) よりクランプのない
- * MessageChannel を使う。
+ * 何窓ごとにイベントループへ譲るか。
+ * long-file の停止ボタン応答のため 4窓(=128ms)ごとに譲歩する。
+ * DFN3 区間は dfn3-engine.ts が独自にフレーム単位で譲歩する。
  */
-const yieldChannel = new MessageChannel();
-yieldChannel.port1.start();
-let yieldResolve: (() => void) | null = null;
-yieldChannel.port1.onmessage = () => {
-  const r = yieldResolve;
-  yieldResolve = null;
-  r?.();
-};
-function yieldToEventLoop(): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  yieldResolve = resolve;
-  yieldChannel.port2.postMessage(null);
-  return promise;
-}
-/** 何窓ごとにイベントループへ譲るか
- * long-file の停止ボタン応答のため 4窓(=128ms)ごとに譲歩。DFN3 は WASM 同期で
- * DFN3 区間は依然ブロックする。 */
 const YIELD_INTERVAL = 4;
 
 const DEFAULT_OPTIONS: PipelineOptions = {
@@ -90,7 +73,7 @@ const DEFAULT_OPTIONS: PipelineOptions = {
 
 export class FilePipeline {
   private vadEngine: VadEngine | null = null;
-  private dfn3Engine: import("./dfn3-engine").Dfn3Engine | null = null;
+  private dfn3Engine: Dfn3Engine | null = null;
   private options: PipelineOptions;
   private onEvent: PipelineEventCallback;
   constructor(opts: Partial<PipelineOptions> = {}, onEvent?: PipelineEventCallback) {
@@ -102,7 +85,7 @@ export class FilePipeline {
     this.vadEngine = engine;
   }
 
-  setDfn3Engine(engine: import("./dfn3-engine").Dfn3Engine | null): void {
+  setDfn3Engine(engine: Dfn3Engine | null): void {
     this.dfn3Engine = engine;
   }
 
@@ -176,9 +159,12 @@ export class FilePipeline {
     this.dfn3Engine.reset();
     try {
       // options.suppression は 0-1。atten_lim は「最大減衰量 dB」(0=低減なし)。
-      let out = this.dfn3Engine.process(hpfOut, (this.options.suppression ?? 1.0) * 100);
+      let out = await this.dfn3Engine.process(
+        hpfOut,
+        (this.options.suppression ?? 1.0) * 100,
+        signal,
+      );
       emit({ type: "progress", percent: 80, etaMs: 1000 });
-      const { applyPostEq } = await import("./post-eq");
       out = await applyPostEq(out, audio.sampleRate, 2.0);
       out = this.applyPostChain(out, audio.sampleRate);
       emit({ type: "progress", percent: 95, etaMs: 200 });
@@ -187,6 +173,8 @@ export class FilePipeline {
       emit({ type: "complete" });
       return { blob, pcm: out };
     } catch (err) {
+      // 中止は「DFN3 の失敗」ではないのでフォールバックせず呼び出し元へ返す。
+      if (err instanceof DOMException && err.name === "AbortError") throw err;
       console.warn("DFN3 error, falling back to standard:", err);
       const out = this.applyPostChain(hpfOut, audio.sampleRate);
       emit({ type: "progress", percent: 100, etaMs: 0 });
@@ -229,6 +217,10 @@ export class FilePipeline {
     const probabilities = new Float32Array(len);
     const t0 = performance.now();
     const [p0, p1] = progressRange;
+    // 窓ごとに emit すると長い音声で postMessage が数万件になるため、
+    // 進捗は約100ms間隔に間引く（最後の窓だけは必ず出す）。
+    const PROGRESS_INTERVAL_MS = 100;
+    let lastEmit = t0;
 
     for (let w = 0; w < numWindows; w++) {
       signal?.throwIfAborted();
@@ -256,12 +248,16 @@ export class FilePipeline {
         }
       }
 
-      // 毎窓で進捗を emit し、実測ベースで残り時間を推定する
-      const elapsed = performance.now() - t0;
+      // 実測ベースで残り時間を推定する（間引きは上記コメント参照）
+      const now = performance.now();
       const done = w + 1;
-      const etaMs = Math.round((elapsed / done) * (numWindows - done));
-      const percent = p0 + Math.round((done / numWindows) * (p1 - p0));
-      emit({ type: "progress", percent, etaMs });
+      if (now - lastEmit >= PROGRESS_INTERVAL_MS || done === numWindows) {
+        lastEmit = now;
+        const elapsed = now - t0;
+        const etaMs = Math.round((elapsed / done) * (numWindows - done));
+        const percent = p0 + Math.round((done / numWindows) * (p1 - p0));
+        emit({ type: "progress", percent, etaMs });
+      }
     }
 
     gate.processBlock(pcm, probabilities, out);

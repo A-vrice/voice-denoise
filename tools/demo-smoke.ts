@@ -1,12 +1,18 @@
 #!/usr/bin/env bun
 /**
- * Smoke: load demo-input.wav via decoder path (manual WAV parse) + run
- * FilePipeline (VAD+Gate+HPF) without ORT (no model) to ensure pipeline
- * and encoder produce valid output. Measures basic metrics.
+ * Smoke: run FilePipeline (VAD+Gate+HPF) without ORT (no model) over
+ * demo-input.wav to ensure the pipeline and encoder produce valid output.
+ * Measures basic metrics.
  */
-import { readFileSync, writeFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { FilePipeline } from "../src/audio/pipeline";
-import { encodeWav } from "../src/audio/encoder";
+
+// Resolve from this file, not cwd, so the script works from any directory.
+const TOOLS_DIR = import.meta.dir;
+const REPO_ROOT = join(TOOLS_DIR, "..");
+/** Scratch output dir (gitignored), shared with the quality harness. */
+const OUT_DIR = join(TOOLS_DIR, "quality/out");
 
 function readWavMono(path: string): { pcm: Float32Array; sr: number } {
   const buf = readFileSync(path);
@@ -19,7 +25,7 @@ function readWavMono(path: string): { pcm: Float32Array; sr: number } {
   return { pcm, sr };
 }
 
-const inPath = "demo-input.wav";
+const inPath = join(REPO_ROOT, "demo-input.wav");
 const { pcm, sr } = readWavMono(inPath);
 console.log(`input: ${pcm.length} samples @${sr}Hz (${(pcm.length / sr).toFixed(2)}s)`);
 
@@ -28,9 +34,22 @@ console.log(`input RMS: ${rms(pcm).toFixed(4)} peak ${Math.max(...pcm).toFixed(3
 
 const pipe = new FilePipeline({ mode: "standard", vadThreshold: 0.5, hpfCutoffHz: 80 });
 const { pcm: out, blob } = await pipe.processPCM(pcm, sr);
-console.log(`output: ${out.length} samples RMS ${rms(out).toFixed(4)} peak ${Math.max(...out).toFixed(3)}`);
+console.log(
+  `output: ${out.length} samples RMS ${rms(out).toFixed(4)} peak ${Math.max(...out).toFixed(3)}`,
+);
 console.log(`blob: ${blob.size} bytes type ${blob.type}`);
-const outArr = Buffer.from(await blob.arrayBuffer());
-writeFileSync("demo-output.wav", outArr);
-console.log(`wrote demo-output.wav ${statSync("demo-output.wav").size} bytes`);
-console.log("SMOKE PASS");
+
+let ok = out.length === pcm.length && blob.size > 44 && out.every(Number.isFinite);
+
+// Dump next to the other scratch output (tools/quality/out/ is gitignored)
+// so listening to the result does not litter the repo root.
+if (ok) {
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(join(OUT_DIR, "demo-output.wav"), Buffer.from(await blob.arrayBuffer()));
+  console.log(`wrote ${join(OUT_DIR, "demo-output.wav")}`);
+}
+
+console.log(ok ? "SMOKE PASS" : "SMOKE FAIL");
+// FilePipeline holds a module-level MessageChannel (event-loop yield), which
+// keeps the Bun process alive; exit explicitly like tools/quality/run_chain.ts.
+process.exit(ok ? 0 : 1);

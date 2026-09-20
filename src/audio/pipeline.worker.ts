@@ -5,11 +5,14 @@
  *
  * Protocol:
  *   main -> worker: { type: "process", id, pcm: Float32Array, sampleRate, options }
+ *                 | { type: "cancel", id }
  *   worker -> main: { type: "progress", id, percent, etaMs }
  *                 | { type: "complete", id, pcm: Float32Array, wavBytes: ArrayBuffer, sampleRate }
  *                 | { type: "error", id, message }
  *
  * Transfer: pcm buffer is transferred to worker; result pcm is transferred back.
+ * Cancel: aborts the job's AbortSignal, which the VAD/DFN3 loops observe at
+ * their event-loop yields (event-loop.ts); no reply is sent for an aborted job.
  */
 import { FilePipeline } from "./pipeline";
 import { createVadEngine, type VadEngine } from "./vad-engine";
@@ -48,50 +51,59 @@ async function getOrCreateDfn3(): Promise<Dfn3Engine | null> {
   }
 }
 
+// 実行中のジョブ id → そのジョブの AbortController。
+// DFN3/VAD ループは event-loop.ts で定期的に譲歩するので、abort はそこで観測される。
+const activeJobs = new Map<number, AbortController>();
+
 self.onmessage = async (e: MessageEvent) => {
   const msg = e.data as {
-    type: string;
     id: number;
+    type: string;
     pcm?: Float32Array;
     sampleRate?: number;
     options?: ConstructorParameters<typeof FilePipeline>[0];
   };
-  if (msg.type !== "process") return;
-  const { id, pcm, sampleRate = 48000, options = {} } = msg;
-  if (!pcm) {
-    (self as unknown as { postMessage: (m: unknown) => void }).postMessage({
-      type: "error",
-      id,
-      message: "missing pcm",
-    });
+
+  if (msg.type === "cancel") {
+    activeJobs.get(msg.id)?.abort();
     return;
   }
+  if (msg.type !== "process") return;
+
+  const { id, pcm, sampleRate = 48000, options = {} } = msg;
+  const post = (m: unknown, transfer?: Transferable[]) =>
+    (self as unknown as { postMessage: (m: unknown, t?: Transferable[]) => void }).postMessage(
+      m,
+      transfer,
+    );
+  if (!pcm) {
+    post({ type: "error", id, message: "missing pcm" });
+    return;
+  }
+
+  const controller = new AbortController();
+  activeJobs.set(id, controller);
   try {
     const vad = await getOrCreateVad();
     const dfn3 = options.mode === "high_quality" ? await getOrCreateDfn3() : null;
     const pipe = new FilePipeline(options, (ev) => {
       if (ev.type === "progress") {
-        (self as unknown as { postMessage: (m: unknown) => void }).postMessage({
-          type: "progress",
-          id,
-          percent: ev.percent,
-          etaMs: ev.etaMs,
-        });
+        post({ type: "progress", id, percent: ev.percent, etaMs: ev.etaMs });
       }
     });
     if (vad) pipe.setVadEngine(vad);
     if (dfn3) pipe.setDfn3Engine(dfn3);
-    const result = await pipe.processPCM(pcm, sampleRate);
+    const result = await pipe.processPCM(pcm, sampleRate, undefined, controller.signal);
     const wavBytes = await result.blob.arrayBuffer();
-    (self as unknown as { postMessage: (m: unknown, t: Transferable[]) => void }).postMessage(
-      { type: "complete", id, pcm: result.pcm, wavBytes, sampleRate },
-      [result.pcm.buffer as unknown as Transferable],
-    );
+    post({ type: "complete", id, pcm: result.pcm, wavBytes, sampleRate }, [
+      result.pcm.buffer as unknown as Transferable,
+    ]);
   } catch (err) {
-    (self as unknown as { postMessage: (m: unknown) => void }).postMessage({
-      type: "error",
-      id,
-      message: err instanceof Error ? err.message : String(err),
-    });
+    // 中止はエラーではない。呼び出し側は既に AbortError で reject 済みなので
+    // 何も返さない（late reply を無視する id チェックも client 側にある）。
+    if (err instanceof DOMException && err.name === "AbortError") return;
+    post({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
+  } finally {
+    activeJobs.delete(id);
   }
 };

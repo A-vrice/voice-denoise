@@ -86,7 +86,9 @@ export class RealtimeProcessor {
           this.ringBuffer = rb;
           workletNode.port.postMessage({ type: "sab", sab });
           return rb;
-        } catch { return null; }
+        } catch {
+          return null;
+        }
       })();
 
       // Handle messages from worklet (audio chunks for VAD)
@@ -155,12 +157,17 @@ export class RealtimeProcessor {
       workletNode.connect(this.recordDest);
 
       this.isActive = true;
-
     } catch (err) {
       // H-3: isActive は成功時のみ true にする。失敗時の ctx/mic は確実に解放。
       this.micStream?.getTracks().forEach((t) => t.stop());
       this.micStream = null;
-      if (this.ctx) { try { await this.ctx.close(); } catch { /* ignore */ } }
+      if (this.ctx) {
+        try {
+          await this.ctx.close();
+        } catch {
+          /* ignore */
+        }
+      }
       this.ctx = null;
       throw err;
     }
@@ -168,35 +175,48 @@ export class RealtimeProcessor {
 
   setSuppression(value: number): void {
     if (this.workletNode) {
-      this.workletNode.port.postMessage({ type: "suppression", value: Math.max(0, Math.min(100, value)) });
+      this.workletNode.port.postMessage({
+        type: "suppression",
+        value: Math.max(0, Math.min(100, value)),
+      });
     }
   }
 
   startRecording(): void {
     if (!this.ctx || !this.recordDest || this.recording) return;
     this.recordedChunks = [];
-    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : "audio/webm";
     try {
       this.recorder = new MediaRecorder(this.recordDest.stream, { mimeType: mime });
     } catch {
       this.recorder = new MediaRecorder(this.recordDest.stream);
     }
-    this.recorder.ondataavailable = (e) => { if (e.data.size > 0) this.recordedChunks.push(e.data); };
+    this.recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) this.recordedChunks.push(e.data);
+    };
     this.recorder.start(100);
     this.recording = true;
   }
 
   stopRecording(): Blob | null {
     if (!this.recorder) return null;
-    try { if (this.recorder.state !== "inactive") this.recorder.stop(); } catch {}
+    try {
+      if (this.recorder.state !== "inactive") this.recorder.stop();
+    } catch {}
     this.recording = false;
-    const blob = this.recordedChunks.length ? new Blob(this.recordedChunks, { type: this.recorder.mimeType || "audio/webm" }) : null;
+    const blob = this.recordedChunks.length
+      ? new Blob(this.recordedChunks, { type: this.recorder.mimeType || "audio/webm" })
+      : null;
     this.recordedChunks = [];
     this.recorder = null;
     return blob;
   }
 
-  get isRecording(): boolean { return this.recording; }
+  get isRecording(): boolean {
+    return this.recording;
+  }
 
   async stop(): Promise<void> {
     if (!this.isActive && !this.micStream && !this.ctx) return;
@@ -205,7 +225,10 @@ export class RealtimeProcessor {
     this.micStream?.getTracks().forEach((t) => t.stop());
     this.micStream = null;
 
-    if (this.recorder && this.recorder.state !== "inactive") try { this.recorder.stop(); } catch {}
+    if (this.recorder && this.recorder.state !== "inactive")
+      try {
+        this.recorder.stop();
+      } catch {}
     this.recorder = null;
     this.recordedChunks = [];
     this.recording = false;
@@ -217,10 +240,13 @@ export class RealtimeProcessor {
     if (this.ctx) {
       const ctx = this.ctx;
       this.ctx = null;
-      try { await ctx.close(); } catch { /* already closed */ }
+      try {
+        await ctx.close();
+      } catch {
+        /* already closed */
+      }
     }
 
     this.isActive = false;
   }
-
 }

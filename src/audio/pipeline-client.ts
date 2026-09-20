@@ -71,7 +71,9 @@ export async function processInWorker(
       if (settled) return;
       settled = true;
       cleanup();
-      // Worker request cannot be cancelled; just ignore its late reply by id check.
+      // 実際に worker 側の処理を止める（以前は reject するだけで、
+      // worker は DFN3 を含む全処理を最後まで走り続けていた）。
+      worker.postMessage({ type: "cancel", id });
       reject(new DOMException("Aborted", "AbortError"));
     };
     const onErr = (e: ErrorEvent) => {
@@ -82,7 +84,15 @@ export async function processInWorker(
       fallbackMainThread(pcm, sampleRate, options, onEvent, signal).then(resolve, reject);
     };
     const onMsg = (e: MessageEvent) => {
-      const m = e.data as { id: number; type: string; percent?: number; etaMs?: number; pcm?: Float32Array; wavBytes?: ArrayBuffer; message?: string };
+      const m = e.data as {
+        id: number;
+        type: string;
+        percent?: number;
+        etaMs?: number;
+        pcm?: Float32Array;
+        wavBytes?: ArrayBuffer;
+        message?: string;
+      };
       if (m.id !== id) return;
       if (m.type === "progress") {
         onEvent?.({ type: "progress", percent: m.percent ?? 0, etaMs: m.etaMs ?? 0 });
@@ -91,7 +101,9 @@ export async function processInWorker(
         settled = true;
         cleanup();
         const outPcm = m.pcm ?? new Float32Array();
-        const blob = m.wavBytes ? new Blob([m.wavBytes], { type: "audio/wav" }) : encodeWav(outPcm, sampleRate);
+        const blob = m.wavBytes
+          ? new Blob([m.wavBytes], { type: "audio/wav" })
+          : encodeWav(outPcm, sampleRate);
         onEvent?.({ type: "progress", percent: 100, etaMs: 0 });
         onEvent?.({ type: "complete" });
         resolve({ blob, pcm: outPcm });

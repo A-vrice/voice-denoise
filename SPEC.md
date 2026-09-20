@@ -31,7 +31,7 @@
      - *v12*: *品質ゲート（W5）+ DFN3 遅延補償*。自前固定セット（CMU ARCTIC
        クリーン + 合成ピンクノイズ、8 ペア）+ チェーンハーネス + 回帰ベースの CI ゲート
        （§9.2）。DFN3 deep-filter の 3 フレーム遅延を pad+trim で補償（STOI 0.79→0.875
-       @0dB SNR）。テスト 48 件 / 12 ファイル。
+       @0dB SNR）。テスト 50 件 / 12 ファイル。
      - *v13（本版）*: *CI baseline + RTF 計測*。CI(Linux) で baseline を再生成（STOI は
        ローカルと一致、PESQ を記入。PESQ ≈1.1–1.9）。`run_chain.ts` に RTF 計測
        （one-shot / steady）を追加し、report / timing を artifact 化。§7.2 に実測 RTF を
@@ -130,8 +130,16 @@
   - 実装: `src/audio/pipeline.ts`（`runVadGate` / `applyHpf` / `applyPostChain`
     の段構成、高品質は DFN3 → Post-EQ を間挿）。
 
-  進捗通知: VAD 段を先頭側、DFN3/PostEQ 以降を後半に割当。
-  キャンセル: `AbortSignal` 対応（`pipeline.abort.test.ts` で検証済み）。
+  進捗通知: VAD 段を先頭側、DFN3/PostEQ 以降を後半に割当。長い音声で
+  postMessage が溢れないよう *約 100ms 間隔に間引き*（最終窓は必ず emit）。
+  キャンセル: `AbortSignal` 対応。`cancel` メッセージ（client → worker）→
+  `AbortController` → VAD 窓ループ / DFN3 フレームループで観測、の経路で
+  *Worker 内の処理も実際に中断する*（`pipeline.abort.test.ts` はメインスレッド
+  経路、`dfn3-engine.test.ts` は DFN3 途中 abort を検証）。実測 60 秒音声の
+  高品質処理を 3 秒後に停止 → UI 反映 517ms。
+  > キャンセルは「ループがイベントループへ譲歩している」ことが前提。譲歩を
+  > `MessageChannel` で行うとタイマー/メッセージのタスクソースが飢餓して abort が
+  > 完走後にしか届かないため、`event-loop.ts` は `setTimeout` ベース（変えないこと）。
 
         3.2 バッファ設計（現状）
 
@@ -185,6 +193,12 @@
 
   > v2 の「合計初回DL ~27MB」は誤り。実測合計は約 38–39MB。wasm-opt は本ビルドに
   > 効果がなく（§4.3）、削減は将来の自前ビルド（LTO 等）で検討する。
+
+  > *追跡状態（重要）*: 上表のバイナリはすべて *git 管理下に置く*。旧 `.gitignore` の
+  > `*.wasm` / `*.onnx` が `ort-wasm-simd-threaded.wasm` と `silero_vad.onnx` を
+  > 除外していたため、クローンには df_bg.wasm とモデル tar しか含まれず、実機は
+  > VAD / ORT 無しで起動していた（`bun test` はどちらも読まないので検知不能。§12）。
+  > 該当行は削除済み。
 
         4.2 Silero VAD の WASM 化方針（継承）
 
@@ -373,6 +387,7 @@
   │   │   ├── vad-gate.ts          # Noise Gate + VadSmoother
   │   │   ├── dfn3-engine.ts       # DFN3 wasm ローダ（Worker/メイン）
   │   │   ├── df.js                # wasm-bindgen glue（ベンダリング）
+  │   │   ├── event-loop.ts        # ループからの yield（キャンセル/描画のため）
   │   │   ├── hpf.ts / auto-gain.ts / limiter.ts / post-eq.ts
   │   │   ├── decoder.ts / encoder.ts / player.ts
   │   │   ├── realtime.ts          # 【非目標・凍結】
@@ -388,7 +403,7 @@
   │   └── wasm/    df_bg.wasm, ort-wasm-simd-threaded.{wasm,mjs}
   ├── SPEC.md          # 本仕様（唯一の正）
   ├── scripts/build-static.ts
-  ├── tools/  quality_gate.py, quality_test.py, demo-smoke.ts,
+  ├── tools/  quality_gate.py, demo-smoke.ts,
   │           build-dfn3-wasm.{md,ps1},
   │           quality/{generate_fixtures.ts, run_chain.ts, fixtures/, sources/}
   ├── .github/workflows/ci.yml
@@ -427,10 +442,10 @@
 
         9.1 自動テスト（現状）
 
-  - 現状 *48 テスト / 12 ファイル / 全パス*、`tsc --noEmit` は 0 エラー。
+  - 現状 *50 テスト / 12 ファイル / 全パス*、`tsc --noEmit` は 0 エラー。
   - 対象: `vad-gate`、`encoder`、`ring-buffer`、`limiter`、`hpf`、`auto-gain`、
     `pipeline.abort`、`pipeline.order`（チェーン順序）、`dfn3-wasm`（glue/モデルの整列）、
-    `dfn3-engine`（engine の遅延補償）、`post-eq`、`vad-engine`（FIR デシメータ）。
+    `dfn3-engine`（engine の遅延補償 + 途中 abort）、`post-eq`、`vad-engine`（FIR デシメータ）。
   - 未カバー: `decoder`（Web Audio 依存）。
 
         9.2 品質テスト（確定: 自前セット + 回帰ゲート、CI）
@@ -511,6 +526,51 @@
    1. *テスト未カバー*: `decoder`（Web Audio 依存）。`vad-engine` は追加済み。
    2. *DFN3 wasm のサイズ*: 16.4MB を維持（wasm-opt は無効と実測、§4.3）。削減は
       将来の自前ビルド（LTO 等）で検討（§15）。
+   3. *CI がアセット欠落を検知できない*: `silero_vad.onnx` / `ort-wasm-simd-threaded.wasm`
+      は `.gitignore` の `*.onnx` / `*.wasm` で除外され *未追跡*（§4.1 の一覧には
+      載っているが、クローンには含まれない）。クリーンチェックアウトではこれらが
+      無いため、実機は VAD 無し・ORT 無しで動く（`bun test` はどちらも読まないので
+      緑のまま）。→ `.gitignore` の該当 2 行を削除し *追跡対象に追加*（解決）。
+      なお wasm/モデルを更新したときは §5.1 の M-1 ルール（`CACHE_NAME` /
+      `MODEL_CACHE` の bump）を忘れないこと。
+   4. *Worker のキャンセルが効かない*: `pipeline-client.ts` は abort で Promise を
+      reject するだけで Worker に通知せず、Worker は DFN3 を含む全処理を最後まで
+      実行し続けていた（=`停止` ボタンは見た目上戻るが計算は継続）。→ *解決*。
+      `cancel` メッセージ + `AbortController`（worker）→ `signal` を DFN3 の
+      フレームループまで伝播、で実際に中断する。実測: 60 秒音声の高品質処理を
+      開始 3 秒後に停止 → UI 反映 517ms、10 秒音声のエンジン単体では
+      1225ms → 249ms（80% 短縮）。
+      *注意*: キャンセルが届く条件は「ループが実際にイベントループへ譲歩している」
+      こと。譲歩を `MessageChannel` で行うと *タイマー/メッセージのタスクソースが
+      飢餓*し、timer 起点の abort が DFN3 完走後にしか届かない（実測で再現）。
+      `event-loop.ts` はそのため `setTimeout` ベースにしてある。ここを
+      MessageChannel に戻してはいけない。
+   5. *進捗メッセージが過多*: `runVadGate` が 1536 サンプル窓ごとに 1 件 emit する
+      ため、10 分の音声で約 18,000 件の postMessage が発生していた。→ *解決*。
+      約 100ms 間隔に間引き（最終窓は必ず emit）。
+   6. *`tools/quality_test.py` は未参照*: 117 行。`quality_gate.py`（回帰ゲート、
+      baseline 対応、CI 接続済み）に役割を譲っており、SPEC のディレクトリ一覧以外から
+      参照されていない。フィクスチャが揃った現在は到達不能。→ *削除済み*。
+
+  ・回帰修正（レビューで発見・修正済み）
+   - *dev/preview で DFN3 が黙って死んでいた*: Vite の静的配信（sirv）は
+     *ファイル名が `.gz` で終わる*という理由だけで `Content-Encoding: gzip` を
+     付けていた。`/models/DeepFilterNet3_onnx.tar.gz` は実際に gzip 済みで
+     `df_create` にそのまま渡す必要があるため、ブラウザが透過的に解凍して
+     *解凍済み tar* を wasm に渡し、`unreachable` でトラップ →
+     `getDfn3Engine()` が null を返し *スタンダード品質へ無言フォールバック*していた。
+     `run_chain.ts` / `bun test` はディスクから直接読むため検知できなかった。
+     対策: `vite.config.ts` の `servePublicAssets()` が `/models/*.tar.gz` と
+     `/wasm/*.{mjs,wasm}` を `Content-Encoding: identity` + 実バイト数の
+     `Content-Length` で配信する（`configureServer` と `configurePreviewServer` の
+     両方）。本番（Cloudflare Pages / 素の静的ホスト）は元から無改変で配信するため、
+     これは dev/preview を本番に揃えるだけ。実測: hq RMS 0.138 vs standard 0.177、
+     平均絶対差 0.065（DFN3 が実際に効いている）。
+   - *`hidden` 属性が効いていなかった*: `.btn { display: inline-flex }` 等の
+     クラス規則が `hidden` 属性に勝つため、`el.hidden = true` が無効化されていた
+     （再生/出力ボタンも常時表示だった）。`src/style.css` に
+     `[hidden] { display: none !important; }` を追加して修正。マイク/録音ボタンは
+     §6.1 のとおり非表示になった。
 
   ・非目標（凍結対象）の既知課題（再開時に扱う）
   - リアルタイム VAD の時間整合（メインスレッド非同期推論）。

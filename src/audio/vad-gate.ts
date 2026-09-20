@@ -73,7 +73,6 @@ export class NoiseGate {
   private state: GateState = GateState.Closed;
   private envelope = 0.0; // current gain [0, 1]
   private holdCounter = 0;
-  private vadOn = false;
   /** Linear progress for equal-power curve [0,1]; separate from envelope gain */
   private progress = 0.0;
 
@@ -88,7 +87,6 @@ export class NoiseGate {
       case GateState.Closed:
         if (isSpeech) {
           this.state = GateState.Attacking;
-          this.vadOn = true;
         }
         break;
 
@@ -96,7 +94,6 @@ export class NoiseGate {
         if (!isSpeech) {
           this.state = GateState.Hold;
           this.holdCounter = 0;
-          this.vadOn = false;
         } else if (this.envelope >= 1.0) {
           this.state = GateState.Open;
         }
@@ -106,14 +103,12 @@ export class NoiseGate {
         if (!isSpeech) {
           this.state = GateState.Hold;
           this.holdCounter = 0;
-          this.vadOn = false;
         }
         break;
 
       case GateState.Hold:
         if (isSpeech) {
           this.state = GateState.Open;
-          this.vadOn = true;
         } else {
           this.holdCounter++;
           if (this.holdCounter >= this.params.holdSamples) {
@@ -125,7 +120,6 @@ export class NoiseGate {
       case GateState.Releasing:
         if (isSpeech) {
           this.state = GateState.Attacking;
-          this.vadOn = true;
         } else if (this.envelope <= 0.0) {
           this.state = GateState.Closed;
         }
@@ -182,7 +176,5 @@ export class NoiseGate {
     this.state = GateState.Closed;
     this.envelope = 0.0;
     this.holdCounter = 0;
-    this.vadOn = false;
   }
-
 }
