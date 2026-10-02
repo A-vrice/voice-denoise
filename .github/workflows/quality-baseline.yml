@@ -25,7 +25,7 @@ jobs:
         run: uv run tools/quality_gate.py --update-baseline --report tools/quality/out/report.json
 
       - name: Upload baseline artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quality-baseline
           path: |
